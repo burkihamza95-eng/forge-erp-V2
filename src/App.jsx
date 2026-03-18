@@ -2434,29 +2434,9 @@ const Analysis = ({ S }) => {
 
 
 // ════════════════════════════════════════════════════════════════════════════
-// MODULE: PRODUCT & BOM EDITOR
+// PRODUCT FORM MODAL (defined outside to prevent re-mount on parent re-render)
 // ════════════════════════════════════════════════════════════════════════════
-const ProductEditor = ({ S, dispatch }) => {
-  const { finishedGoods, bom, rawMaterials } = S;
-  const [tab, setTab] = useState("products");
-  const [search, setSearch] = useState("");
-  const [editProduct, setEditProduct] = useState(null);
-  const [editBomFg, setEditBomFg] = useState(null);
-  const [showAddProduct, setShowAddProduct] = useState(false);
-  const [showImport, setShowImport] = useState(false);
-  const [importMsg, setImportMsg] = useState(null);
-  const fileRef = useRef();
-
-  const filtered = finishedGoods.filter(fg =>
-    fg.name.toLowerCase().includes(search.toLowerCase()) ||
-    fg.id.toLowerCase().includes(search.toLowerCase()) ||
-    fg.category.toLowerCase().includes(search.toLowerCase())
-  );
-
-  const categories = [...new Set(finishedGoods.map(f=>f.category))];
-
-  // ── ADD/EDIT PRODUCT FORM ──
-  const ProductForm = ({ initial, onSave, onClose }) => {
+const ProductForm = ({ initial, onSave, onClose, categories }) => {
     const [form, setForm] = useState(initial || { id:"", name:"", category:"", leadDays:5, basePrice:0 });
     const isNew = !initial?.id;
     return (
@@ -2504,8 +2484,10 @@ const ProductEditor = ({ S, dispatch }) => {
     );
   };
 
-  // ── BOM EDITOR ──
-  const BomEditor = ({ fg, onClose }) => {
+// ════════════════════════════════════════════════════════════════════════════
+// BOM EDITOR MODAL (defined outside to prevent re-mount on parent re-render)
+// ════════════════════════════════════════════════════════════════════════════
+const BomEditorModal = ({ fg, onClose, bom, rawMaterials, dispatch }) => {
     const currentBom = bom[fg.id] || [];
     const [lines, setLines] = useState(currentBom.map(l=>({...l})));
     const [rmSearch, setRmSearch] = useState("");
@@ -2620,6 +2602,30 @@ const ProductEditor = ({ S, dispatch }) => {
       </Modal>
     );
   };
+
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE: PRODUCT & BOM EDITOR
+// ════════════════════════════════════════════════════════════════════════════
+const ProductEditor = ({ S, dispatch }) => {
+  const { finishedGoods, bom, rawMaterials } = S;
+  const [tab, setTab] = useState("products");
+  const [search, setSearch] = useState("");
+  const [editProduct, setEditProduct] = useState(null);
+  const [editBomFg, setEditBomFg] = useState(null);
+  const [showAddProduct, setShowAddProduct] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [importMsg, setImportMsg] = useState(null);
+  const fileRef = useRef();
+
+  const filtered = finishedGoods.filter(fg =>
+    fg.name.toLowerCase().includes(search.toLowerCase()) ||
+    fg.id.toLowerCase().includes(search.toLowerCase()) ||
+    fg.category.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const categories = [...new Set(finishedGoods.map(f=>f.category))];
 
   // ── EXCEL IMPORT ──
   const handleFileImport = async (e) => {
@@ -2783,19 +2789,22 @@ const ProductEditor = ({ S, dispatch }) => {
 
       {showAddProduct && (
         <ProductForm
+          categories={categories}
           onSave={form=>dispatch({type:"ADD_PRODUCT",payload:{...form,id:form.id||genId("FG")}})}
           onClose={()=>setShowAddProduct(false)} />
       )}
 
       {editProduct && (
         <ProductForm
+          categories={categories}
           initial={editProduct}
           onSave={form=>dispatch({type:"UPDATE_PRODUCT",payload:form})}
           onClose={()=>setEditProduct(null)} />
       )}
 
       {editBomFg && (
-        <BomEditor fg={editBomFg} onClose={()=>setEditBomFg(null)} />
+        <BomEditorModal fg={editBomFg} onClose={()=>setEditBomFg(null)}
+          bom={bom} rawMaterials={rawMaterials} dispatch={dispatch} />
       )}
     </div>
   );
