@@ -1801,6 +1801,8 @@ function appReducer(state, { type, payload }) {
     }
     case "ADD_JOURNAL_ENTRY": return { ...state, journalEntries: [payload, ...(state.journalEntries||[])] };
     case "ADD_VENDOR":    return { ...state, vendors: [...(state.vendors||[]), payload] };
+    case "UPDATE_VENDOR": return { ...state, vendors: (state.vendors||[]).map(v=>v.id===payload.id?{...v,...payload}:v) };
+    case "DELETE_VENDOR": return { ...state, vendors: (state.vendors||[]).filter(v=>v.id!==payload) };
     case "ADD_CUSTOMER_LEDGER": return { ...state, customerLedger: [payload, ...(state.customerLedger||[])] };
     case "ADD_EXPENSE":   return { ...state, expenses: [payload, ...(state.expenses||[])] };
     default: return state;
@@ -3336,164 +3338,184 @@ const Production = ({ S, dispatch }) => {
 };
 
 // ════════════════════════════════════════════════════════════════════════════
-// MODULE: PROCUREMENT
-// ════════════════════════════════════════════════════════════════════════════
-// ════════════════════════════════════════════════════════════════════════════
-// PROCUREMENT MODAL — searchable supplier + material
+// PROCUREMENT MODAL — multi-item, subject field, light theme inputs
 // ════════════════════════════════════════════════════════════════════════════
 const ProcurementModal = ({ rawMaterials, suppliers, onClose, onSave }) => {
-  const [supplierQ, setSupplierQ] = useState("");
+  const [supplierQ, setSupplierQ]     = useState("");
   const [supplierSel, setSupplierSel] = useState(null);
   const [showSupDrop, setShowSupDrop] = useState(false);
-  const [matQ, setMatQ] = useState("");
-  const [matSel, setMatSel] = useState(null);
+  const [subject, setSubject]         = useState("");
+  const [etaDate, setEtaDate]         = useState("");
+  const [lines, setLines]             = useState([]); // [{mat, qty, unitPrice}]
+  const [matQ, setMatQ]               = useState("");
   const [showMatDrop, setShowMatDrop] = useState(false);
-  const [qty, setQty] = useState(1);
-  const [unitPrice, setUnitPrice] = useState(0);
-  const [etaDate, setEtaDate] = useState("");
 
-  const filteredSup = suppliers.filter(s =>
-    !supplierQ || s.name.toLowerCase().includes(supplierQ.toLowerCase())
-  ).slice(0,10);
-
-  const filteredMat = rawMaterials.filter(m =>
-    !matQ || m.internalRef.toLowerCase().includes(matQ.toLowerCase()) ||
-    m.name.toLowerCase().includes(matQ.toLowerCase()) ||
+  const filteredSup = suppliers.filter(s=>!supplierQ||s.name.toLowerCase().includes(supplierQ.toLowerCase())).slice(0,10);
+  const filteredMat = rawMaterials.filter(m=>
+    !matQ||m.internalRef.toLowerCase().includes(matQ.toLowerCase())||
+    m.name.toLowerCase().includes(matQ.toLowerCase())||
     m.category.toLowerCase().includes(matQ.toLowerCase())
-  ).slice(0,15);
+  ).filter(m=>!lines.find(l=>l.mat.id===m.id)).slice(0,15);
 
-  const dropStyle = { position:"absolute", top:"100%", left:0, right:0, zIndex:100,
-    background:"#fff", border:`1px solid ${C.primary}`, borderRadius:6,
-    boxShadow:"0 4px 16px rgba(0,0,0,0.12)", maxHeight:220, overflowY:"auto" };
+  const addLine = (m) => {
+    setLines(p=>[...p, {mat:m, qty:1, unitPrice:m.cost||0}]);
+    setMatQ(""); setShowMatDrop(false);
+  };
+  const removeLine = id => setLines(p=>p.filter(l=>l.mat.id!==id));
+  const setLineQty = (id, v) => setLines(p=>p.map(l=>l.mat.id===id?{...l,qty:parseInt(v)||1}:l));
+  const setLinePrice = (id, v) => setLines(p=>p.map(l=>l.mat.id===id?{...l,unitPrice:parseFloat(v)||0}:l));
+  const total = lines.reduce((s,l)=>s+l.qty*l.unitPrice,0);
 
-  const dropItem = (active) => ({ padding:"9px 12px", cursor:"pointer",
-    fontSize:13, borderBottom:`1px solid ${C.border}`,
-    background: active ? C.primaryLight : "transparent" });
+  const inp = { width:"100%", padding:"8px 10px", border:`1px solid ${C.border}`,
+    borderRadius:6, fontSize:13, outline:"none", boxSizing:"border-box",
+    background:"#fff", color:C.text };
 
   return (
-    <Modal title="New Purchase Order" onClose={onClose} width={520}>
-      <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+    <Modal title="New Purchase Order" onClose={onClose} width={680}>
+      <div style={{display:"flex",flexDirection:"column",gap:16}}>
 
-        {/* Supplier searchable */}
-        <div>
-          <div style={{ fontSize:12, fontWeight:500, color:C.textMid, marginBottom:5 }}>Supplier</div>
-          <div style={{ position:"relative" }}>
-            <input value={supplierSel ? supplierSel.name : supplierQ}
-              onChange={e=>{ setSupplierQ(e.target.value); setSupplierSel(null); setShowSupDrop(true); }}
-              onFocus={()=>setShowSupDrop(true)}
-              onBlur={()=>setTimeout(()=>setShowSupDrop(false),150)}
-              placeholder="Type to search suppliers... (or leave blank)"
-              style={{ width:"100%", padding:"8px 10px", border:`1px solid ${C.border}`,
-                borderRadius:6, fontSize:13, outline:"none", boxSizing:"border-box" }}
-              onFocusCapture={e=>e.target.style.borderColor=C.primary}
-            />
-            {showSupDrop && supplierQ && filteredSup.length > 0 && (
-              <div style={dropStyle}>
-                {filteredSup.map(s=>(
-                  <div key={s.id}
-                    onMouseDown={()=>{ setSupplierSel(s); setSupplierQ(s.name); setShowSupDrop(false); }}
-                    style={dropItem(supplierSel?.id===s.id)}
-                    onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
-                    onMouseLeave={e=>e.currentTarget.style.background=supplierSel?.id===s.id?C.primaryLight:"transparent"}>
-                    <span style={{fontWeight:500}}>{s.name}</span>
-                    <span style={{fontSize:11,color:C.textMid,marginLeft:8}}>{s.category}</span>
-                  </div>
-                ))}
-                <div onMouseDown={()=>{ setSupplierSel({id:"new",name:supplierQ}); setShowSupDrop(false); }}
-                  style={{...dropItem(false), color:C.primary, fontStyle:"italic"}}>
-                  + Use "{supplierQ}" as new supplier
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Material searchable */}
-        <div>
-          <div style={{ fontSize:12, fontWeight:500, color:C.textMid, marginBottom:5 }}>Material <span style={{color:"red"}}>*</span></div>
-          <div style={{ position:"relative" }}>
-            <input value={matSel ? `${matSel.internalRef} — ${matSel.name}` : matQ}
-              onChange={e=>{ setMatQ(e.target.value); setMatSel(null); setShowMatDrop(true); }}
-              onFocus={()=>setShowMatDrop(true)}
-              onBlur={()=>setTimeout(()=>setShowMatDrop(false),150)}
-              placeholder="Type ref, name or category to search..."
-              style={{ width:"100%", padding:"8px 10px", border:`1px solid ${C.border}`,
-                borderRadius:6, fontSize:13, outline:"none", boxSizing:"border-box" }}
-              onFocusCapture={e=>e.target.style.borderColor=C.primary}
-            />
-            {showMatDrop && matQ && filteredMat.length > 0 && (
-              <div style={dropStyle}>
-                {filteredMat.map(m=>(
-                  <div key={m.id}
-                    onMouseDown={()=>{ setMatSel(m); setMatQ(""); setShowMatDrop(false); }}
-                    style={dropItem(matSel?.id===m.id)}
-                    onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
-                    onMouseLeave={e=>e.currentTarget.style.background=matSel?.id===m.id?C.primaryLight:"transparent"}>
-                    <div style={{fontSize:11,fontFamily:"monospace",color:C.textMid}}>{m.internalRef}</div>
-                    <div style={{fontSize:12,color:C.text}}>{m.name.length>60?m.name.slice(0,60)+"…":m.name}</div>
-                    <div style={{fontSize:10,color:C.textDim}}>{m.category} · {m.stock} {m.unit} in stock</div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {showMatDrop && matQ && filteredMat.length===0 && (
-              <div style={dropStyle}>
-                <div style={{padding:"12px",color:C.textMid,fontSize:13}}>No materials found for "{matQ}"</div>
-              </div>
-            )}
-          </div>
-          {matSel && (
-            <div style={{ marginTop:6, background:C.primaryLight, border:`1px solid ${C.border}`,
-              borderRadius:6, padding:"8px 10px", fontSize:12, display:"flex", justifyContent:"space-between" }}>
-              <span style={{fontFamily:"monospace",color:C.primary}}>{matSel.internalRef}</span>
-              <span style={{color:C.textMid}}>{matSel.name.slice(0,50)}</span>
-              <button onMouseDown={()=>setMatSel(null)}
-                style={{background:"none",border:"none",cursor:"pointer",color:C.textMid,fontSize:14}}>✕</button>
-            </div>
-          )}
-        </div>
-
+        {/* Row 1: Supplier + Subject */}
         <div style={{display:"flex",gap:12}}>
           <div style={{flex:1}}>
-            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Quantity</div>
-            <input type="number" min={1} value={qty} onChange={e=>setQty(parseInt(e.target.value)||1)}
-              style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Supplier</div>
+            <div style={{position:"relative"}}>
+              <input value={supplierSel?supplierSel.name:supplierQ}
+                onChange={e=>{setSupplierQ(e.target.value);setSupplierSel(null);setShowSupDrop(true);}}
+                onFocus={()=>setShowSupDrop(true)} onBlur={()=>setTimeout(()=>setShowSupDrop(false),150)}
+                placeholder="Search or type supplier name..."
+                style={inp} onFocusCapture={e=>e.target.style.borderColor=C.primary}/>
+              {showSupDrop&&supplierQ&&(
+                <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:200,background:"#fff",
+                  border:`1px solid ${C.primary}`,borderRadius:6,boxShadow:"0 4px 16px rgba(0,0,0,.12)",maxHeight:200,overflowY:"auto"}}>
+                  {filteredSup.map(s=>(
+                    <div key={s.id} onMouseDown={()=>{setSupplierSel(s);setSupplierQ(s.name);setShowSupDrop(false);}}
+                      style={{padding:"9px 12px",cursor:"pointer",fontSize:13,borderBottom:`1px solid ${C.border}`}}
+                      onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+                      onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                      <span style={{fontWeight:500}}>{s.name}</span>
+                      <span style={{fontSize:11,color:C.textMid,marginLeft:8}}>{s.category}</span>
+                    </div>
+                  ))}
+                  <div onMouseDown={()=>{setSupplierSel({id:"new",name:supplierQ});setShowSupDrop(false);}}
+                    style={{padding:"9px 12px",cursor:"pointer",fontSize:13,color:C.primary,fontStyle:"italic"}}
+                    onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+                    onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    + Add "{supplierQ}" as new supplier
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
           <div style={{flex:1}}>
-            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Unit Price (PKR)</div>
-            <input type="number" min={0} step="0.01" value={unitPrice} onChange={e=>setUnitPrice(parseFloat(e.target.value)||0)}
-              style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>PO Subject / Description</div>
+            <input value={subject} onChange={e=>setSubject(e.target.value)}
+              placeholder="e.g. Monthly fasteners restock, PCB order..."
+              style={inp} onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+          </div>
+          <div style={{flex:"0 0 140px"}}>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>ETA Date</div>
+            <input type="date" value={etaDate} onChange={e=>setEtaDate(e.target.value)} style={inp}
+              onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
           </div>
         </div>
 
+        {/* Material search + add */}
         <div>
-          <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>ETA Date</div>
-          <input type="date" value={etaDate} onChange={e=>setEtaDate(e.target.value)}
-            style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+          <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Add Materials *</div>
+          <div style={{position:"relative"}}>
+            <input value={matQ} onChange={e=>{setMatQ(e.target.value);setShowMatDrop(true);}}
+              onFocus={()=>setShowMatDrop(true)} onBlur={()=>setTimeout(()=>setShowMatDrop(false),150)}
+              placeholder="Search by internal ref, name or category to add items..."
+              style={{...inp, paddingLeft:34}} onFocusCapture={e=>e.target.style.borderColor=C.primary}/>
+            <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:C.textDim,fontSize:14}}>🔍</span>
+            {showMatDrop&&matQ&&(
+              <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:200,background:"#fff",
+                border:`1px solid ${C.primary}`,borderRadius:6,boxShadow:"0 4px 16px rgba(0,0,0,.12)",maxHeight:240,overflowY:"auto"}}>
+                {filteredMat.length===0
+                  ? <div style={{padding:"12px",color:C.textMid,fontSize:13}}>No materials found for "{matQ}"</div>
+                  : filteredMat.map(m=>(
+                    <div key={m.id} onMouseDown={()=>addLine(m)}
+                      style={{padding:"10px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}
+                      onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+                      onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                      <div>
+                        <span style={{fontFamily:"monospace",fontSize:11,color:C.textMid}}>{m.internalRef}</span>
+                        <span style={{fontSize:12,color:C.text,marginLeft:8}}>{m.name.slice(0,55)}</span>
+                      </div>
+                      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                        <span style={{fontSize:11,color:C.textMid}}>{m.category}</span>
+                        <span style={{fontSize:11,color:m.stock<=m.minStock?C.danger:C.success,fontWeight:500}}>Stock: {m.stock}</span>
+                        <span style={{fontSize:11,color:C.primary,fontWeight:600}}>+ Add</span>
+                      </div>
+                    </div>
+                  ))
+                }
+              </div>
+            )}
+          </div>
         </div>
 
-        {matSel && qty && (
-          <div style={{background:"#f9fafb",border:`1px solid ${C.border}`,borderRadius:6,padding:"10px 14px",
-            display:"flex",justifyContent:"space-between"}}>
-            <span style={{fontSize:13,color:C.textMid}}>Total Value:</span>
-            <span style={{fontSize:14,fontWeight:700,color:C.primary}}>{fmt$(qty*unitPrice)}</span>
+        {/* Lines table */}
+        {lines.length > 0 && (
+          <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+            <table style={{width:"100%",borderCollapse:"collapse"}}>
+              <thead>
+                <tr style={{background:"#f9fafb",borderBottom:`1px solid ${C.border}`}}>
+                  {["Internal Ref","Part Name","Qty","Unit Price (PKR)","Line Total",""].map(h=>(
+                    <th key={h} style={{padding:"8px 12px",textAlign:"left",fontSize:11,fontWeight:600,color:C.textMid,textTransform:"uppercase"}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map(l=>(
+                  <tr key={l.mat.id} style={{borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"8px 12px",fontFamily:"monospace",fontSize:11,color:C.textMid}}>{l.mat.internalRef}</td>
+                    <td style={{padding:"8px 12px",fontSize:12,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l.mat.name}</td>
+                    <td style={{padding:"8px 12px",width:80}}>
+                      <input type="number" min={1} value={l.qty} onChange={e=>setLineQty(l.mat.id,e.target.value)}
+                        style={{width:"100%",padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:4,fontSize:12,background:"#fff",color:C.text,outline:"none"}}/>
+                    </td>
+                    <td style={{padding:"8px 12px",width:130}}>
+                      <input type="number" min={0} step="0.01" value={l.unitPrice} onChange={e=>setLinePrice(l.mat.id,e.target.value)}
+                        style={{width:"100%",padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:4,fontSize:12,background:"#fff",color:C.text,outline:"none"}}/>
+                    </td>
+                    <td style={{padding:"8px 12px",fontFamily:"monospace",fontSize:12,fontWeight:600,color:C.primary}}>{fmt$(l.qty*l.unitPrice)}</td>
+                    <td style={{padding:"8px 12px"}}>
+                      <button onClick={()=>removeLine(l.mat.id)}
+                        style={{background:"none",border:"none",cursor:"pointer",color:C.danger,fontSize:16,padding:"2px 6px"}}>✕</button>
+                    </td>
+                  </tr>
+                ))}
+                <tr style={{background:"#f9fafb",borderTop:`2px solid ${C.border}`}}>
+                  <td colSpan={4} style={{padding:"10px 12px",fontSize:13,fontWeight:600,color:C.text,textAlign:"right"}}>Grand Total:</td>
+                  <td style={{padding:"10px 12px",fontFamily:"monospace",fontSize:14,fontWeight:700,color:C.primary}}>{fmt$(total)}</td>
+                  <td/>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+        {lines.length===0 && (
+          <div style={{background:"#f9fafb",border:`1px dashed ${C.border}`,borderRadius:8,padding:"20px",textAlign:"center",color:C.textDim,fontSize:13}}>
+            Search and add materials above to build your PO line items
           </div>
         )}
 
         <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
           <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
           <Btn onClick={()=>{
-            if(!matSel) return;
+            if(lines.length===0) return;
             onSave({
-              id:genId("PO"),
-              supplierId: supplierSel?.id||"",
-              supplierName: supplierSel?.name||"",
-              materialId: matSel.id,
-              qty, unitPrice, total:qty*unitPrice,
-              etaDate, status:"Confirmed",
+              id:genId("PO"), subject,
+              supplierId:supplierSel?.id||"", supplierName:supplierSel?.name||"",
+              lines: lines.map(l=>({materialId:l.mat.id,materialRef:l.mat.internalRef,materialName:l.mat.name,qty:l.qty,unitPrice:l.unitPrice,lineTotal:l.qty*l.unitPrice})),
+              materialId: lines[0]?.mat.id||"", // for backward compat
+              total, etaDate, status:"Confirmed",
               date:new Date().toISOString().split("T")[0]
             });
-          }}>Create PO</Btn>
+          }} disabled={lines.length===0}>
+            Create PO ({lines.length} item{lines.length!==1?"s":""}) — {fmt$(total)}
+          </Btn>
         </div>
       </div>
     </Modal>
@@ -3670,13 +3692,13 @@ const Procurement = ({ S, dispatch }) => {
 // ════════════════════════════════════════════════════════════════════════════
 const USERS = [
   { id:"hamza",    name:"Hamza",    role:"Admin",       avatar:"H",  color:"#714b67", password:"Hamza@123",
-    access:["dash","analysis","sales","mfg","prod","inv","proc","editor","warehouse","transfers","accounting"] },
+    access:["dash","analysis","sales","mfg","prod","inv","proc","vendors","editor","warehouse","transfers","locations","accounting"] },
   { id:"abdullah", name:"Abdullah", role:"Admin",       avatar:"Ab", color:"#0066cc", password:"Abdullah@123",
-    access:["dash","analysis","sales","mfg","prod","inv","proc","editor","warehouse","transfers","accounting"] },
+    access:["dash","analysis","sales","mfg","prod","inv","proc","vendors","editor","warehouse","transfers","locations","accounting"] },
   { id:"ahsan",    name:"Ahsan",    role:"Operations",  avatar:"A",  color:"#017e84", password:"Ahsan@123",
-    access:["sales","inv","proc"] },
+    access:["sales","inv","proc","vendors"] },
   { id:"hafiz",    name:"Hafiz",    role:"Inventory",   avatar:"Hf", color:"#28a745", password:"Hafiz@123",
-    access:["inv","sales"] },
+    access:["inv","sales","locations","warehouse","transfers"] },
   { id:"yasir",    name:"Yasir",    role:"Sales",       avatar:"Y",  color:"#f59e0b", password:"Yasir@123",
     access:["dash","analysis","inv","sales"] },
 ];
@@ -4109,61 +4131,14 @@ const Warehouse = ({ S, dispatch, currentUser }) => {
         </Card>
       )}
 
-      {/* GRN Modal */}
+      {/* GRN Modal — multi-item */}
       {showGRN && (
-        <Modal title="📥 Goods Received Note" onClose={()=>setShowGRN(false)} width={540}>
-          <div style={{display:"flex",flexDirection:"column",gap:14}}>
-            <div>
-              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Linked Purchase Order (optional)</div>
-              <select value={grnForm.poId} onChange={e=>setGrnForm(p=>({...p,poId:e.target.value}))}
-                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}>
-                <option value="">— No PO linked —</option>
-                {purchaseOrders.filter(p=>!["Received","Cancelled"].includes(p.status)).map(po=>(
-                  <option key={po.id} value={po.id}>{po.id} · {rawMaterials.find(m=>m.id===po.materialId)?.internalRef||po.materialId}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Material Received *</div>
-              <div style={{position:"relative"}}>
-                <input value={grnSel?`${grnSel.internalRef} — ${grnSel.name}`:grnSearch}
-                  onChange={e=>{setGrnSearch(e.target.value);setGrnSel(null);setShowGrnDrop(true);}}
-                  onFocus={()=>setShowGrnDrop(true)} onBlur={()=>setTimeout(()=>setShowGrnDrop(false),150)}
-                  placeholder="Search material by ref or name..."
-                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
-                <SearchDrop items={filteredGrn} show={showGrnDrop&&!!grnSearch} onSel={i=>{setGrnSel(i);setGrnSearch("");setShowGrnDrop(false);}}/>
-              </div>
-            </div>
-            <div style={{display:"flex",gap:12}}>
-              <div style={{flex:1}}>
-                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Qty Received *</div>
-                <input type="number" min={1} value={grnForm.qtyReceived} onChange={e=>setGrnForm(p=>({...p,qtyReceived:e.target.value}))}
-                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
-              </div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Condition</div>
-                <select value={grnForm.condition} onChange={e=>setGrnForm(p=>({...p,condition:e.target.value}))}
-                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}>
-                  {["Good","Acceptable","Damaged","Rejected"].map(c=><option key={c}>{c}</option>)}
-                </select>
-              </div>
-            </div>
-            <div>
-              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Notes / Remarks</div>
-              <input value={grnForm.notes} onChange={e=>setGrnForm(p=>({...p,notes:e.target.value}))} placeholder="Batch number, damage notes, etc."
-                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
-            </div>
-            {grnSel&&grnForm.qtyReceived&&(
-              <div style={{background:"#f0fff4",border:"1px solid #c6f6d5",borderRadius:6,padding:"10px 14px",fontSize:13}}>
-                <div style={{fontWeight:600,color:C.success}}>✓ Receiving {grnForm.qtyReceived} × {grnSel.internalRef}</div>
-                <div style={{color:C.textMid,marginTop:2}}>Stock: {grnSel.stock||0} → {(grnSel.stock||0)+parseInt(grnForm.qtyReceived||0)}</div>
-              </div>
-            )}
-            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-              <Btn variant="secondary" onClick={()=>setShowGRN(false)}>Cancel</Btn>
-              <Btn onClick={handleGRN} disabled={!grnSel||!grnForm.qtyReceived}>Confirm GRN</Btn>
-            </div>
-          </div>
+        <Modal title="📥 Goods Received Note (GRN)" onClose={()=>setShowGRN(false)} width={680}>
+          <GRNModal
+            rawMaterials={rawMaterials} purchaseOrders={purchaseOrders}
+            currentUser={currentUser} dispatch={dispatch}
+            onClose={()=>setShowGRN(false)}
+          />
         </Modal>
       )}
 
@@ -4742,6 +4717,593 @@ const Accounting = ({ S, dispatch, currentUser }) => {
   );
 };
 
+// ════════════════════════════════════════════════════════════════════════════
+// GRN MODAL — multi-item receiving (outside Warehouse to prevent re-mount)
+// ════════════════════════════════════════════════════════════════════════════
+const GRNModal = ({ rawMaterials, purchaseOrders, currentUser, dispatch, onClose }) => {
+  const [poId, setPoId]         = useState("");
+  const [notes, setNotes]       = useState("");
+  const [condition, setCondition] = useState("Good");
+  const [lines, setLines]       = useState([]); // [{mat, qty}]
+  const [search, setSearch]     = useState("");
+  const [showDrop, setShowDrop] = useState(false);
+
+  const selPO = purchaseOrders.find(p=>p.id===poId);
+
+  // If a PO is selected, pre-fill lines from PO
+  const handlePoSelect = (id) => {
+    setPoId(id);
+    const po = purchaseOrders.find(p=>p.id===id);
+    if (!po) { setLines([]); return; }
+    // Support multi-line POs
+    if (po.lines && po.lines.length > 0) {
+      const prefilled = po.lines.map(l=>{
+        const mat = rawMaterials.find(m=>m.id===l.materialId);
+        return mat ? {mat, qty:l.qty} : null;
+      }).filter(Boolean);
+      setLines(prefilled);
+    } else if (po.materialId) {
+      const mat = rawMaterials.find(m=>m.id===po.materialId);
+      if (mat) setLines([{mat, qty:po.qty||1}]);
+    }
+  };
+
+  const filteredMat = rawMaterials.filter(m=>
+    !search||m.internalRef.toLowerCase().includes(search.toLowerCase())||
+    m.name.toLowerCase().includes(search.toLowerCase())
+  ).filter(m=>!lines.find(l=>l.mat.id===m.id)).slice(0,12);
+
+  const addLine = m => { setLines(p=>[...p,{mat:m,qty:1}]); setSearch(""); setShowDrop(false); };
+  const removeLine = id => setLines(p=>p.filter(l=>l.mat.id!==id));
+  const setQty = (id,v) => setLines(p=>p.map(l=>l.mat.id===id?{...l,qty:parseInt(v)||1}:l));
+
+  const inp = {width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box",background:"#fff",color:C.text};
+
+  const handleConfirm = () => {
+    if (lines.length===0) return;
+    const today = new Date().toISOString().split("T")[0];
+    const time  = new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+    lines.forEach(l => {
+      dispatch({type:"ADD_GRN", payload:{
+        id:genId("GRN"), date:today, time, poId, grnRef:genId("GRN"),
+        itemId:l.mat.id, itemRef:l.mat.internalRef, itemName:l.mat.name,
+        qtyReceived:l.qty, condition, notes,
+        receivedBy:currentUser.name, status:"Received"
+      }});
+      dispatch({type:"ADJUST_LOC_STOCK",payload:{locationId:"warehouse",itemId:l.mat.id,delta:l.qty}});
+      dispatch({type:"ADJUST_STOCK",payload:{id:l.mat.id,stock:(l.mat.stock||0)+l.qty}});
+    });
+    if (poId) dispatch({type:"ADD_PO",payload:{...selPO,status:"Received"}});
+    onClose();
+  };
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      <div style={{display:"flex",gap:12}}>
+        <div style={{flex:1}}>
+          <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Linked PO (auto-fills items)</div>
+          <select value={poId} onChange={e=>handlePoSelect(e.target.value)} style={inp}>
+            <option value="">— No PO linked —</option>
+            {purchaseOrders.filter(p=>!["Received","Cancelled"].includes(p.status)).map(po=>(
+              <option key={po.id} value={po.id}>{po.id} {po.subject?`· ${po.subject}`:""} · {po.supplierName||"—"}</option>
+            ))}
+          </select>
+        </div>
+        <div style={{flex:"0 0 130px"}}>
+          <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Condition</div>
+          <select value={condition} onChange={e=>setCondition(e.target.value)} style={inp}>
+            {["Good","Acceptable","Damaged","Rejected"].map(c=><option key={c}>{c}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {/* Add material search */}
+      <div>
+        <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Add / Search Materials *</div>
+        <div style={{position:"relative"}}>
+          <input value={search} onChange={e=>{setSearch(e.target.value);setShowDrop(true);}}
+            onFocus={()=>setShowDrop(true)} onBlur={()=>setTimeout(()=>setShowDrop(false),150)}
+            placeholder="Search by ref or name to add materials..."
+            style={{...inp,paddingLeft:34}}/>
+          <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:C.textDim,fontSize:14}}>🔍</span>
+          {showDrop&&search&&(
+            <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:200,background:"#fff",
+              border:`1px solid ${C.primary}`,borderRadius:6,boxShadow:"0 4px 16px rgba(0,0,0,.12)",maxHeight:200,overflowY:"auto"}}>
+              {filteredMat.length===0
+                ? <div style={{padding:"12px",color:C.textMid,fontSize:12}}>No materials found</div>
+                : filteredMat.map(m=>(
+                  <div key={m.id} onMouseDown={()=>addLine(m)}
+                    style={{padding:"9px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,fontSize:12}}
+                    onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+                    onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    <span style={{fontFamily:"monospace",fontSize:10,color:C.textMid}}>{m.internalRef}</span>
+                    <span style={{marginLeft:8}}>{m.name.slice(0,55)}</span>
+                  </div>
+                ))
+              }
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Lines */}
+      {lines.length>0 ? (
+        <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{background:"#f9fafb",borderBottom:`1px solid ${C.border}`}}>
+                {["Ref","Part Name","Qty to Receive","Current Stock",""].map(h=>(
+                  <th key={h} style={{padding:"8px 12px",textAlign:"left",fontSize:11,fontWeight:600,color:C.textMid,textTransform:"uppercase"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map(l=>(
+                <tr key={l.mat.id} style={{borderBottom:`1px solid ${C.border}`}}>
+                  <td style={{padding:"8px 12px",fontFamily:"monospace",fontSize:11,color:C.textMid}}>{l.mat.internalRef}</td>
+                  <td style={{padding:"8px 12px",fontSize:12,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l.mat.name}</td>
+                  <td style={{padding:"8px 12px",width:100}}>
+                    <input type="number" min={1} value={l.qty} onChange={e=>setQty(l.mat.id,e.target.value)}
+                      style={{width:"100%",padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:4,fontSize:12,background:"#fff",color:C.text,outline:"none"}}/>
+                  </td>
+                  <td style={{padding:"8px 12px",fontSize:12,color:C.textMid}}>{l.mat.stock||0} {l.mat.unit}</td>
+                  <td style={{padding:"8px 12px"}}>
+                    <button onClick={()=>removeLine(l.mat.id)}
+                      style={{background:"none",border:"none",cursor:"pointer",color:C.danger,fontSize:16}}>✕</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div style={{background:"#f9fafb",border:`1px dashed ${C.border}`,borderRadius:8,padding:"20px",textAlign:"center",color:C.textDim,fontSize:13}}>
+          Select a PO above or search materials manually
+        </div>
+      )}
+
+      <div>
+        <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Notes / Remarks</div>
+        <input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Batch numbers, delivery notes..."
+          style={inp}/>
+      </div>
+
+      {lines.length>0 && (
+        <div style={{background:"#f0fff4",border:"1px solid #c6f6d5",borderRadius:6,padding:"10px 14px",fontSize:13}}>
+          <span style={{fontWeight:600,color:C.success}}>✓ Ready to receive {lines.length} item type{lines.length>1?"s":""} — total {lines.reduce((s,l)=>s+l.qty,0)} units</span>
+        </div>
+      )}
+
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+        <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+        <Btn onClick={handleConfirm} disabled={lines.length===0}>
+          Confirm GRN ({lines.length} item{lines.length!==1?"s":""})
+        </Btn>
+      </div>
+    </div>
+  );
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE: VENDORS / SUPPLIERS
+// ════════════════════════════════════════════════════════════════════════════
+const Vendors = ({ S, dispatch }) => {
+  const vendors = S.vendors || [];
+  const [showAdd, setShowAdd] = useState(false);
+  const [editV, setEditV]     = useState(null);
+  const [search, setSearch]   = useState("");
+  const blank = { name:"", category:"", contact:"", email:"", phone:"", address:"", paymentTerms:"30 days", notes:"" };
+  const [form, setForm] = useState(blank);
+  const set = k => e => setForm(p=>({...p,[k]:e.target.value}));
+
+  const filtered = vendors.filter(v=>!search||v.name.toLowerCase().includes(search.toLowerCase())||v.category.toLowerCase().includes(search.toLowerCase()));
+
+  const openEdit = v => { setEditV(v); setForm({...v}); };
+  const closeModal = () => { setShowAdd(false); setEditV(null); setForm(blank); };
+
+  const save = () => {
+    if (!form.name.trim()) return;
+    if (editV) {
+      dispatch({type:"UPDATE_VENDOR", payload:{...form, id:editV.id}});
+    } else {
+      dispatch({type:"ADD_VENDOR", payload:{...form, id:genId("VND"), createdDate:new Date().toISOString().split("T")[0]}});
+    }
+    closeModal();
+  };
+
+  const inp = {width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box",background:"#fff",color:C.text};
+
+  return (
+    <div style={{animation:"slide-in .3s ease"}}>
+      <PageHeader title="Vendors & Suppliers" subtitle={`${vendors.length} vendors registered`}
+        actions={<Btn icon="+" onClick={()=>setShowAdd(true)}>Add Vendor</Btn>}
+      />
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
+        <StatCard label="Total Vendors"   value={vendors.length}                                      icon="🤝" color={C.primary}  />
+        <StatCard label="Categories"      value={[...new Set(vendors.map(v=>v.category))].filter(Boolean).length} icon="🏷️" color={C.info} />
+        <StatCard label="With Contact"    value={vendors.filter(v=>v.email).length}                   icon="📧" color={C.success}  />
+        <StatCard label="Active PO Links" value={[...new Set((S.purchaseOrders||[]).map(p=>p.supplierName).filter(Boolean))].length} icon="🛒" color={C.warning} />
+      </div>
+
+      <Card style={{marginBottom:16,padding:12}}>
+        <div style={{position:"relative"}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search vendors by name or category..."
+            style={{...inp,paddingLeft:34}}/>
+          <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:C.textDim,fontSize:14}}>🔍</span>
+        </div>
+      </Card>
+
+      {filtered.length===0 ? (
+        <div style={{textAlign:"center",padding:"60px 20px",background:"#fff",borderRadius:10,border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:40,marginBottom:12}}>🤝</div>
+          <div style={{fontSize:16,fontWeight:600,color:C.text,marginBottom:6}}>No vendors yet</div>
+          <div style={{fontSize:13,color:C.textMid,marginBottom:16}}>Add your suppliers to manage procurement effectively</div>
+          <Btn onClick={()=>setShowAdd(true)} icon="+">Add First Vendor</Btn>
+        </div>
+      ) : (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:14}}>
+          {filtered.map(v=>(
+            <div key={v.id} style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:10,padding:18,
+              boxShadow:"0 1px 4px rgba(0,0,0,0.05)",transition:"box-shadow .2s"}}
+              onMouseEnter={e=>e.currentTarget.style.boxShadow="0 4px 16px rgba(0,0,0,0.1)"}
+              onMouseLeave={e=>e.currentTarget.style.boxShadow="0 1px 4px rgba(0,0,0,0.05)"}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{width:40,height:40,borderRadius:"50%",background:C.primaryLight,
+                    display:"flex",alignItems:"center",justifyContent:"center",
+                    fontSize:16,fontWeight:700,color:C.primary}}>
+                    {v.name.slice(0,1).toUpperCase()}
+                  </div>
+                  <div>
+                    <div style={{fontSize:14,fontWeight:600,color:C.text}}>{v.name}</div>
+                    <div style={{fontSize:11,color:C.textMid}}>{v.category||"General"}</div>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:4}}>
+                  <button onClick={()=>openEdit(v)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:4,
+                    padding:"4px 8px",cursor:"pointer",fontSize:11,color:C.textMid}}>Edit</button>
+                  <button onClick={()=>{ if(window.confirm(`Delete ${v.name}?`)) dispatch({type:"DELETE_VENDOR",payload:v.id}); }}
+                    style={{background:"none",border:`1px solid #fecaca`,borderRadius:4,
+                    padding:"4px 8px",cursor:"pointer",fontSize:11,color:C.danger}}>Del</button>
+                </div>
+              </div>
+              {v.contact && <div style={{fontSize:12,color:C.textMid,marginBottom:4}}>👤 {v.contact}</div>}
+              {v.email   && <div style={{fontSize:12,color:C.info,marginBottom:4}}>✉️ {v.email}</div>}
+              {v.phone   && <div style={{fontSize:12,color:C.textMid,marginBottom:4}}>📞 {v.phone}</div>}
+              {v.address && <div style={{fontSize:12,color:C.textMid,marginBottom:4}}>📍 {v.address}</div>}
+              {v.paymentTerms && <div style={{fontSize:11,color:C.textMid,marginTop:8,paddingTop:8,borderTop:`1px solid ${C.border}`}}>Payment Terms: {v.paymentTerms}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(showAdd||editV) && (
+        <Modal title={editV?"Edit Vendor":"Add New Vendor"} onClose={closeModal} width={540}>
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div style={{display:"flex",gap:12}}>
+              <div style={{flex:2}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Vendor / Supplier Name *</div>
+                <input value={form.name} onChange={set("name")} placeholder="e.g. MetalCore Ltd" style={inp}
+                  onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Category</div>
+                <input value={form.category} onChange={set("category")} placeholder="e.g. Electronics" list="vnd-cats" style={inp}
+                  onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+                <datalist id="vnd-cats">{["Electronics","Fasteners","Plastics","Raw Metal","Seals & Gaskets","PCB","Mechanical","Cables","Other"].map(c=><option key={c} value={c}/>)}</datalist>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:12}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Contact Person</div>
+                <input value={form.contact} onChange={set("contact")} placeholder="Full name" style={inp}
+                  onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Phone</div>
+                <input value={form.phone} onChange={set("phone")} placeholder="+92 300 1234567" style={inp}
+                  onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+              </div>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Email</div>
+              <input value={form.email} onChange={set("email")} placeholder="vendor@example.com" type="email" style={inp}
+                onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Address</div>
+              <input value={form.address} onChange={set("address")} placeholder="Street, City, Country" style={inp}
+                onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+            </div>
+            <div style={{display:"flex",gap:12}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Payment Terms</div>
+                <select value={form.paymentTerms} onChange={set("paymentTerms")} style={inp}>
+                  {["Advance","On Delivery","7 days","15 days","30 days","45 days","60 days"].map(t=><option key={t}>{t}</option>)}
+                </select>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Notes</div>
+                <input value={form.notes} onChange={set("notes")} placeholder="Any additional notes" style={inp}
+                  onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <Btn variant="secondary" onClick={closeModal}>Cancel</Btn>
+              <Btn onClick={save}>{editV?"Save Changes":"Add Vendor"}</Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE: LOCATIONS — stock by location, drill-down, cross-location search
+// ════════════════════════════════════════════════════════════════════════════
+const LocationsModule = ({ S }) => {
+  const { rawMaterials, finishedGoods, locationStocks={}, grns=[], transfers=[] } = S;
+  const [selLoc, setSelLoc]       = useState(null);  // selected location id
+  const [selItem, setSelItem]     = useState(null);  // drill-down item
+  const [globalSearch, setGlobalSearch] = useState(""); // cross-location search
+  const [locSearch, setLocSearch] = useState("");    // search within location
+
+  const allItems = [
+    ...rawMaterials.map(m=>({...m, type:"RM"})),
+    ...finishedGoods.map(f=>({...f, type:"FG"})),
+  ];
+
+  // Build location inventory map
+  const getLocItems = (locId) => {
+    const itemIds = new Set(
+      Object.keys(locationStocks).filter(k=>k.startsWith(locId+"__")).map(k=>k.split("__")[1])
+    );
+    return [...itemIds].map(id=>{
+      const qty = locationStocks[`${locId}__${id}`]||0;
+      const item = allItems.find(i=>i.id===id);
+      return item ? {...item, locQty:qty} : null;
+    }).filter(Boolean).filter(i=>i.locQty>0);
+  };
+
+  // Cross-location search — find all locations where an item exists
+  const crossSearch = globalSearch.trim() ? (() => {
+    const q = globalSearch.toLowerCase();
+    const results = [];
+    LOCATIONS.forEach(loc=>{
+      const items = getLocItems(loc.id).filter(i=>
+        i.internalRef?.toLowerCase().includes(q)||
+        i.id?.toLowerCase().includes(q)||
+        i.name.toLowerCase().includes(q)||
+        i.category?.toLowerCase().includes(q)
+      );
+      if (items.length>0) results.push({loc, items});
+    });
+    return results;
+  })() : [];
+
+  // Item drill-down data
+  const getDrillDown = (item) => {
+    const itemGrns = grns.filter(g=>g.itemId===item.id);
+    const avgPrice = itemGrns.length > 0
+      ? (itemGrns.reduce((s,g)=>{ const m=rawMaterials.find(r=>r.id===g.itemId); return s+(m?.cost||0)*g.qtyReceived; },0) /
+         itemGrns.reduce((s,g)=>s+g.qtyReceived,0)) : (item.cost||0);
+    const locBreakdown = LOCATIONS.map(loc=>({
+      loc, qty: locationStocks[`${loc.id}__${item.id}`]||0
+    })).filter(l=>l.qty>0);
+    const itemTransfers = transfers.filter(t=>t.itemId===item.id);
+    return { itemGrns, avgPrice, locBreakdown, itemTransfers };
+  };
+
+  const locItems = selLoc ? getLocItems(selLoc).filter(i=>
+    !locSearch||i.internalRef?.toLowerCase().includes(locSearch.toLowerCase())||
+    i.name.toLowerCase().includes(locSearch.toLowerCase())
+  ) : [];
+
+  return (
+    <div style={{animation:"slide-in .3s ease"}}>
+      <PageHeader title="Locations" subtitle="Stock by location, drill-down, and cross-location search" />
+
+      {/* Global cross-location search */}
+      <Card style={{marginBottom:20,padding:16}}>
+        <div style={{fontSize:13,fontWeight:600,color:C.text,marginBottom:10}}>🔍 Cross-Location Search</div>
+        <div style={{position:"relative"}}>
+          <input value={globalSearch} onChange={e=>setGlobalSearch(e.target.value)}
+            placeholder="Search any material or product — see all locations it exists in..."
+            style={{width:"100%",padding:"10px 10px 10px 36px",border:`1px solid ${C.border}`,borderRadius:8,
+              fontSize:13,outline:"none",boxSizing:"border-box",background:"#fff",color:C.text}}
+            onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+          <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",color:C.textDim,fontSize:16}}>🔍</span>
+        </div>
+        {globalSearch && crossSearch.length===0 && (
+          <div style={{marginTop:10,fontSize:13,color:C.textMid}}>No stock found for "{globalSearch}" in any location.</div>
+        )}
+        {crossSearch.length>0 && (
+          <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:10}}>
+            {crossSearch.map(({loc,items})=>(
+              <div key={loc.id} style={{background:"#f9fafb",border:`1px solid ${C.border}`,borderRadius:8,padding:14}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                  <span style={{fontSize:18}}>{loc.icon}</span>
+                  <span style={{fontSize:14,fontWeight:600,color:loc.color}}>{loc.name}</span>
+                  <span style={{fontSize:12,color:C.textMid}}>— {items.length} matching item{items.length>1?"s":""}</span>
+                </div>
+                {items.map(i=>(
+                  <div key={i.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                    padding:"7px 10px",background:"#fff",borderRadius:6,marginBottom:6,border:`1px solid ${C.border}`,
+                    cursor:"pointer"}}
+                    onClick={()=>{setSelLoc(loc.id);setSelItem(i);setGlobalSearch("");}}
+                    onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+                    onMouseLeave={e=>e.currentTarget.style.background="#fff"}>
+                    <div>
+                      <span style={{fontFamily:"monospace",fontSize:11,color:C.textMid}}>{i.internalRef||i.id}</span>
+                      <span style={{fontSize:12,color:C.text,marginLeft:8}}>{i.name.slice(0,50)}</span>
+                    </div>
+                    <span style={{fontWeight:700,color:C.success,fontSize:14}}>{i.locQty} {i.unit||"pcs"}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* Location cards */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
+        {LOCATIONS.map(loc=>{
+          const items = getLocItems(loc.id);
+          const total = items.reduce((s,i)=>s+i.locQty,0);
+          const on = selLoc===loc.id;
+          return (
+            <div key={loc.id} onClick={()=>{setSelLoc(on?null:loc.id);setSelItem(null);setLocSearch("");}}
+              style={{background:"#fff",border:`2px solid ${on?loc.color:C.border}`,borderRadius:12,
+                padding:18,cursor:"pointer",transition:"all .15s",
+                boxShadow:on?`0 4px 16px ${loc.color}33`:"0 1px 4px rgba(0,0,0,0.05)"}}
+              onMouseEnter={e=>{ if(!on) e.currentTarget.style.borderColor=loc.color+"88"; }}
+              onMouseLeave={e=>{ if(!on) e.currentTarget.style.borderColor=C.border; }}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+                <div style={{width:40,height:40,borderRadius:10,background:`${loc.color}18`,
+                  display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>{loc.icon}</div>
+                <div style={{fontSize:14,fontWeight:700,color:on?loc.color:C.text}}>{loc.name}</div>
+              </div>
+              <div style={{fontSize:24,fontWeight:800,color:loc.color,lineHeight:1}}>{items.length}</div>
+              <div style={{fontSize:11,color:C.textMid,marginTop:2}}>SKUs · {total} total units</div>
+              {on && <div style={{marginTop:8,fontSize:11,color:loc.color,fontWeight:600}}>▶ Selected — see below</div>}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Location detail */}
+      {selLoc && !selItem && (() => {
+        const loc = LOCATIONS.find(l=>l.id===selLoc);
+        return (
+          <Card pad={false}>
+            <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:20}}>{loc.icon}</span>
+                <span style={{fontSize:14,fontWeight:600,color:loc.color}}>{loc.name}</span>
+                <span style={{fontSize:12,color:C.textMid}}>— {locItems.length} item{locItems.length!==1?"s":""}</span>
+              </div>
+              <div style={{position:"relative",width:260}}>
+                <input value={locSearch} onChange={e=>setLocSearch(e.target.value)}
+                  placeholder="Search in this location..."
+                  style={{width:"100%",padding:"7px 10px 7px 32px",border:`1px solid ${C.border}`,borderRadius:6,
+                    fontSize:12,outline:"none",boxSizing:"border-box",background:"#fff",color:C.text}}/>
+                <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:C.textDim,fontSize:12}}>🔍</span>
+              </div>
+            </div>
+            {locItems.length===0
+              ? <div style={{padding:30,textAlign:"center",color:C.textMid}}>No stock in {loc.name} yet.</div>
+              : <Table heads={["Ref","Name","Category","Type","Stock Here","Unit","Action"]}>
+                  {locItems.map(i=>(
+                    <TR key={i.id} cells={[
+                      <span style={{fontFamily:"monospace",fontSize:11,color:C.textMid}}>{i.internalRef||i.id}</span>,
+                      <span style={{fontSize:12,fontWeight:500,maxWidth:220,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block"}}>{i.name}</span>,
+                      <span style={{fontSize:11,color:C.textMid}}>{i.category||"—"}</span>,
+                      <Badge label={i.type}/>,
+                      <span style={{fontWeight:700,fontSize:14,color:C.success}}>{i.locQty}</span>,
+                      <span style={{fontSize:12}}>{i.unit||"pcs"}</span>,
+                      <button onClick={()=>setSelItem(i)}
+                        style={{padding:"4px 10px",background:C.primaryLight,border:`1px solid ${C.border}`,
+                          borderRadius:4,cursor:"pointer",fontSize:11,color:C.primary,fontWeight:500}}>
+                        View Details →
+                      </button>
+                    ]}/>
+                  ))}
+                </Table>
+            }
+          </Card>
+        );
+      })()}
+
+      {/* Item drill-down */}
+      {selItem && (() => {
+        const { itemGrns, avgPrice, locBreakdown, itemTransfers } = getDrillDown(selItem);
+        const loc = LOCATIONS.find(l=>l.id===selLoc);
+        return (
+          <Card>
+            <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20,paddingBottom:16,borderBottom:`1px solid ${C.border}`}}>
+              <button onClick={()=>setSelItem(null)}
+                style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                  padding:"5px 12px",cursor:"pointer",fontSize:12,color:C.textMid}}>
+                ← Back to {loc?.name}
+              </button>
+              <span style={{fontSize:16}}>{loc?.icon}</span>
+              <div>
+                <div style={{fontSize:16,fontWeight:700,color:C.text}}>{selItem.name}</div>
+                <div style={{fontSize:11,color:C.textMid,fontFamily:"monospace"}}>{selItem.internalRef||selItem.id}</div>
+              </div>
+            </div>
+
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
+              <StatCard label="Stock in Location" value={selItem.locQty} icon="📦" color={C.success}/>
+              <StatCard label="Total Stock" value={selItem.stock||0} icon="🏭" color={C.primary}/>
+              <StatCard label="GRN Count" value={itemGrns.length} icon="📥" color={C.info}/>
+              <StatCard label="Avg Unit Price" value={fmt$(avgPrice)} icon="💰" color={C.warning}/>
+            </div>
+
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+              {/* Details */}
+              <div>
+                <div style={{fontSize:13,fontWeight:600,marginBottom:12}}>Part Details</div>
+                {[
+                  ["Internal Reference", selItem.internalRef||selItem.id],
+                  ["Category", selItem.category||"—"],
+                  ["Type", selItem.type],
+                  ["Unit", selItem.unit||"pcs"],
+                  ["Min Stock", selItem.minStock||0],
+                  ["Unit Cost", fmt$(selItem.cost||0)],
+                ].map(([label,value])=>(
+                  <div key={label} style={{display:"flex",justifyContent:"space-between",
+                    padding:"7px 0",borderBottom:`1px solid ${C.border}`}}>
+                    <span style={{fontSize:12,color:C.textMid}}>{label}</span>
+                    <span style={{fontSize:12,fontWeight:500,color:C.text}}>{value}</span>
+                  </div>
+                ))}
+                <div style={{marginTop:16,fontSize:13,fontWeight:600,marginBottom:10}}>Stock Across Locations</div>
+                {locBreakdown.length===0
+                  ? <div style={{fontSize:12,color:C.textMid}}>Not found in any location</div>
+                  : locBreakdown.map(({loc:l,qty})=>(
+                    <div key={l.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                      padding:"8px 12px",background:`${l.color}0d`,borderRadius:6,marginBottom:6}}>
+                      <span style={{fontSize:13}}>{l.icon} {l.name}</span>
+                      <span style={{fontWeight:700,color:l.color}}>{qty} {selItem.unit||"pcs"}</span>
+                    </div>
+                  ))
+                }
+              </div>
+
+              {/* GRN History */}
+              <div>
+                <div style={{fontSize:13,fontWeight:600,marginBottom:12}}>GRN History ({itemGrns.length})</div>
+                {itemGrns.length===0
+                  ? <div style={{fontSize:12,color:C.textMid}}>No GRNs recorded for this item yet</div>
+                  : <div style={{maxHeight:280,overflowY:"auto"}}>
+                      {itemGrns.map(g=>(
+                        <div key={g.id} style={{background:"#f9fafb",border:`1px solid ${C.border}`,
+                          borderRadius:6,padding:"10px 12px",marginBottom:8}}>
+                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                            <span style={{fontFamily:"monospace",fontSize:11,color:C.success,fontWeight:600}}>{g.id}</span>
+                            <span style={{fontWeight:700,color:C.success}}>+{g.qtyReceived} {selItem.unit}</span>
+                          </div>
+                          <div style={{fontSize:11,color:C.textMid}}>{g.date} {g.time} · {g.receivedBy}</div>
+                          {g.poId && <div style={{fontSize:11,color:C.textMid,marginTop:2}}>PO: {g.poId}</div>}
+                          <div style={{fontSize:11,marginTop:2}}><Badge label={g.condition}/></div>
+                          {g.notes && <div style={{fontSize:11,color:C.textMid,marginTop:4}}>📝 {g.notes}</div>}
+                        </div>
+                      ))}
+                    </div>
+                }
+              </div>
+            </div>
+          </Card>
+        );
+      })()}
+    </div>
+  );
+};
+
 const NAV = [
   { id:"dash",       label:"Dashboard",       icon:"⊞",  group:"Main" },
   { id:"analysis",   label:"Analysis",        icon:"📊", group:"Main" },
@@ -4750,8 +5312,10 @@ const NAV = [
   { id:"prod",       label:"Production",      icon:"🏭", group:"Operations" },
   { id:"inv",        label:"Inventory",       icon:"📦", group:"Operations" },
   { id:"proc",       label:"Procurement",     icon:"🛒", group:"Operations" },
+  { id:"vendors",    label:"Vendors",         icon:"🤝", group:"Operations" },
   { id:"transfers",  label:"Stock Transfers", icon:"🔄", group:"Warehouse" },
   { id:"warehouse",  label:"Warehouse (GRN)", icon:"🏬", group:"Warehouse" },
+  { id:"locations",  label:"Locations",       icon:"📍", group:"Warehouse" },
   { id:"accounting", label:"Accounting",      icon:"💰", group:"Finance" },
   { id:"editor",     label:"Products & BOMs", icon:"✏️", group:"Configuration" },
 ];
@@ -4930,8 +5494,10 @@ export default function App() {
             {safeActive==="sales"      && <SalesOrders   S={S} dispatch={dispatch} />}
             {safeActive==="prod"       && <Production    S={S} dispatch={dispatch} />}
             {safeActive==="proc"       && <Procurement   S={S} dispatch={dispatch} />}
+            {safeActive==="vendors"    && <Vendors        S={S} dispatch={dispatch} />}
             {safeActive==="transfers"  && <StockTransfers S={S} dispatch={dispatch} currentUser={currentUser} />}
             {safeActive==="warehouse"  && <Warehouse      S={S} dispatch={dispatch} currentUser={currentUser} />}
+            {safeActive==="locations"  && <LocationsModule S={S} />}
             {safeActive==="accounting" && <Accounting     S={S} dispatch={dispatch} currentUser={currentUser} />}
             {safeActive==="editor"     && <ProductEditor  S={S} dispatch={dispatch} />}
           </div>
