@@ -1799,13 +1799,17 @@ function appReducer(state, { type, payload }) {
       locStocks[key] = Math.max(0, (locStocks[key]||0) + payload.delta);
       return { ...state, locationStocks: locStocks };
     }
+    case "ADD_JOURNAL_ENTRY": return { ...state, journalEntries: [payload, ...(state.journalEntries||[])] };
+    case "ADD_VENDOR":    return { ...state, vendors: [...(state.vendors||[]), payload] };
+    case "ADD_CUSTOMER_LEDGER": return { ...state, customerLedger: [payload, ...(state.customerLedger||[])] };
+    case "ADD_EXPENSE":   return { ...state, expenses: [payload, ...(state.expenses||[])] };
     default: return state;
   }
 }
 
 
 // ─── UTILITIES ────────────────────────────────────────────────────────────────
-const fmt$  = n => "$" + Number(n||0).toLocaleString("en-US", {minimumFractionDigits:0, maximumFractionDigits:0});
+const fmt$  = n => "PKR " + Number(n||0).toLocaleString("en-PK", {minimumFractionDigits:0, maximumFractionDigits:0});
 const fmtDt = d => d ? new Date(d).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}) : "—";
 const genId = p => `${p}-${String(Math.floor(Math.random()*90000)+10000)}`;
 
@@ -2469,7 +2473,7 @@ const ProductForm = ({ initial, onSave, onClose, categories }) => {
                 onChange={e=>setForm({...form,leadDays:parseInt(e.target.value)||0})} />
             </div>
             <div style={{flex:1}}>
-              <Input label="Base Price (USD)" type="number" value={form.basePrice}
+              <Input label="Base Price (PKR)" type="number" value={form.basePrice}
                 onChange={e=>setForm({...form,basePrice:parseFloat(e.target.value)||0})} />
             </div>
           </div>
@@ -3456,7 +3460,7 @@ const ProcurementModal = ({ rawMaterials, suppliers, onClose, onSave }) => {
               style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
           </div>
           <div style={{flex:1}}>
-            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Unit Price (USD)</div>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Unit Price (PKR)</div>
             <input type="number" min={0} step="0.01" value={unitPrice} onChange={e=>setUnitPrice(parseFloat(e.target.value)||0)}
               style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
           </div>
@@ -3556,7 +3560,7 @@ const AddPartModal = ({ onClose, dispatch, rawMaterials }) => {
               style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
           </div>
           <div style={{flex:1}}>
-            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Unit Cost (USD)</div>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Unit Cost (PKR)</div>
             <input type="number" min={0} step="0.01" value={form.cost} onChange={set("cost")}
               style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
           </div>
@@ -3666,9 +3670,9 @@ const Procurement = ({ S, dispatch }) => {
 // ════════════════════════════════════════════════════════════════════════════
 const USERS = [
   { id:"hamza",    name:"Hamza",    role:"Admin",       avatar:"H",  color:"#714b67", password:"Hamza@123",
-    access:["dash","analysis","sales","mfg","prod","inv","proc","editor","warehouse","transfers"] },
+    access:["dash","analysis","sales","mfg","prod","inv","proc","editor","warehouse","transfers","accounting"] },
   { id:"abdullah", name:"Abdullah", role:"Admin",       avatar:"Ab", color:"#0066cc", password:"Abdullah@123",
-    access:["dash","analysis","sales","mfg","prod","inv","proc","editor","warehouse","transfers"] },
+    access:["dash","analysis","sales","mfg","prod","inv","proc","editor","warehouse","transfers","accounting"] },
   { id:"ahsan",    name:"Ahsan",    role:"Operations",  avatar:"A",  color:"#017e84", password:"Ahsan@123",
     access:["sales","inv","proc"] },
   { id:"hafiz",    name:"Hafiz",    role:"Inventory",   avatar:"Hf", color:"#28a745", password:"Hafiz@123",
@@ -4224,17 +4228,532 @@ const Warehouse = ({ S, dispatch, currentUser }) => {
   );
 };
 
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE: ACCOUNTING
+// ════════════════════════════════════════════════════════════════════════════
+const Accounting = ({ S, dispatch, currentUser }) => {
+  const { salesOrders=[], purchaseOrders=[], grns=[], dispatches=[],
+    journalEntries=[], expenses=[], finishedGoods=[], rawMaterials=[], suppliers=[] } = S;
+  const [tab, setTab] = useState("overview");
+  const [showJE, setShowJE] = useState(false);
+  const [showExp, setShowExp] = useState(false);
+  const [jeForm, setJeForm] = useState({ date:"", description:"", account:"", type:"debit", amount:"", ref:"" });
+  const [expForm, setExpForm] = useState({ date:"", description:"", category:"", amount:"", vendor:"", ref:"" });
+
+  // ── Derived financials from real ERP data ────────────────────────────────
+  const revenue    = salesOrders.filter(o=>["Shipped","Delivered"].includes(o.status)).reduce((s,o)=>s+(o.total||0),0);
+  const pipeline   = salesOrders.filter(o=>!["Cancelled","Delivered","Shipped"].includes(o.status)).reduce((s,o)=>s+(o.total||0),0);
+  const poSpend    = purchaseOrders.filter(p=>!["Cancelled"].includes(p.status)).reduce((s,p)=>s+(p.total||0),0);
+  const expTotal   = expenses.reduce((s,e)=>s+(e.amount||0),0);
+  const cogs       = grns.reduce((s,g)=>{ const m=rawMaterials.find(r=>r.id===g.itemId); return s+(g.qtyReceived||0)*(m?.cost||0); },0);
+  const grossProfit= revenue - cogs;
+  const netProfit  = grossProfit - expTotal;
+  const totalAssets= revenue + poSpend * 0.4; // simplified
+  const totalLiab  = poSpend * 0.6;
+  const equity     = totalAssets - totalLiab;
+
+  // Chart of Accounts
+  const ACCOUNTS = [
+    { code:"1100", name:"Cash & Bank",            type:"Asset",     balance: revenue - poSpend*0.5 },
+    { code:"1200", name:"Accounts Receivable",    type:"Asset",     balance: pipeline },
+    { code:"1300", name:"Inventory",              type:"Asset",     balance: rawMaterials.reduce((s,m)=>s+(m.stock||0)*(m.cost||0),0) },
+    { code:"1400", name:"Fixed Assets",           type:"Asset",     balance: 0 },
+    { code:"2100", name:"Accounts Payable",       type:"Liability", balance: purchaseOrders.filter(p=>!["Received","Cancelled"].includes(p.status)).reduce((s,p)=>s+(p.total||0),0) },
+    { code:"2200", name:"Accrued Expenses",       type:"Liability", balance: expTotal },
+    { code:"3100", name:"Owner's Equity",         type:"Equity",    balance: equity },
+    { code:"4100", name:"Sales Revenue",          type:"Revenue",   balance: revenue },
+    { code:"4200", name:"Pipeline Revenue",       type:"Revenue",   balance: pipeline },
+    { code:"5100", name:"Cost of Goods Sold",     type:"Expense",   balance: cogs },
+    { code:"5200", name:"Operating Expenses",     type:"Expense",   balance: expTotal },
+    { code:"5300", name:"Purchase Orders Spend",  type:"Expense",   balance: poSpend },
+  ];
+
+  // Auto-generate journal entries from ERP transactions
+  const autoJE = [
+    ...salesOrders.filter(o=>["Shipped","Delivered"].includes(o.status)).map(o=>({
+      id:`AJE-SO-${o.id}`, date:o.date||"", description:`Sales Revenue — ${o.customer}`,
+      debit:"1200", credit:"4100", amount:o.total||0, ref:o.id, auto:true
+    })),
+    ...grns.map(g=>({
+      id:`AJE-GRN-${g.id}`, date:g.date||"", description:`Goods Received — ${g.itemRef}`,
+      debit:"1300", credit:"2100", amount:(g.qtyReceived||0)*(rawMaterials.find(m=>m.id===g.itemId)?.cost||0), ref:g.id, auto:true
+    })),
+    ...dispatches.map(d=>({
+      id:`AJE-DSP-${d.id}`, date:d.date||"", description:`Dispatch — ${d.customer}`,
+      debit:"2100", credit:"1200", amount:0, ref:d.id, auto:true
+    })),
+    ...expenses.map(e=>({
+      id:e.id, date:e.date||"", description:e.description,
+      debit:"5200", credit:"1100", amount:e.amount||0, ref:e.ref||"", auto:false
+    })),
+    ...journalEntries,
+  ].filter(e=>e.amount>0);
+
+  // Customer ledger derived from SOs
+  const customers = [...new Set(salesOrders.map(o=>o.customer))];
+  const custLedger = customers.map(c => {
+    const orders = salesOrders.filter(o=>o.customer===c);
+    const paid   = orders.filter(o=>["Shipped","Delivered"].includes(o.status)).reduce((s,o)=>s+(o.total||0),0);
+    const due    = orders.filter(o=>!["Shipped","Delivered","Cancelled"].includes(o.status)).reduce((s,o)=>s+(o.total||0),0);
+    return { name:c, orders:orders.length, paid, due, balance:due };
+  });
+
+  // Vendor ledger derived from POs
+  const vendorNames = [...new Set(purchaseOrders.map(p=>p.supplierName||p.supplierId||"Unknown"))];
+  const vendorLedger = vendorNames.filter(Boolean).map(v => {
+    const pos = purchaseOrders.filter(p=>(p.supplierName||p.supplierId||"Unknown")===v);
+    const paid = pos.filter(p=>p.status==="Received").reduce((s,p)=>s+(p.total||0),0);
+    const due  = pos.filter(p=>!["Received","Cancelled"].includes(p.status)).reduce((s,p)=>s+(p.total||0),0);
+    return { name:v, pos:pos.length, paid, due, balance:due };
+  });
+
+  const TABS = [
+    {id:"overview",  label:"Overview"},
+    {id:"gl",        label:"General Ledger"},
+    {id:"trial",     label:"Trial Balance"},
+    {id:"pl",        label:"P&L"},
+    {id:"bs",        label:"Balance Sheet"},
+    {id:"cashflow",  label:"Cash Flow"},
+    {id:"cust",      label:"Customer Ledger"},
+    {id:"vendor",    label:"Vendor Ledger"},
+  ];
+
+  const AccountTypeColor = t => ({Asset:"#0066cc",Liability:"#dc3545",Equity:"#714b67",Revenue:"#28a745",Expense:"#f59e0b"}[t]||"#6c757d");
+
+  const MoneyRow = ({label,value,bold=false,indent=0,color,border=false}) => (
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+      padding:`${border?"10px":"6px"} ${indent*16}px 6px 0`,
+      borderTop:border?`1px solid ${C.border}`:"none",
+      fontWeight:bold?700:400}}>
+      <span style={{fontSize:13,color:color||C.text}}>{label}</span>
+      <span style={{fontSize:13,color:color||(value<0?C.danger:C.text),fontFamily:"monospace"}}>{fmt$(value)}</span>
+    </div>
+  );
+
+  return (
+    <div style={{animation:"slide-in .3s ease"}}>
+      <PageHeader title="Accounting" subtitle="Financial records, ledgers, and statements — PKR"
+        actions={
+          <div style={{display:"flex",gap:8}}>
+            <Btn variant="secondary" icon="📝" onClick={()=>setShowExp(true)}>Add Expense</Btn>
+            <Btn icon="📒" onClick={()=>setShowJE(true)}>Journal Entry</Btn>
+          </div>
+        }
+      />
+
+      {/* Tab bar */}
+      <div style={{display:"flex",gap:2,borderBottom:`1px solid ${C.border}`,marginBottom:20,overflowX:"auto"}}>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)}
+            style={{padding:"9px 16px",border:"none",background:"transparent",fontSize:12,cursor:"pointer",
+              whiteSpace:"nowrap",fontWeight:tab===t.id?600:400,color:tab===t.id?C.primary:C.textMid,
+              borderBottom:tab===t.id?`2px solid ${C.primary}`:"2px solid transparent",marginBottom:-1}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── OVERVIEW ── */}
+      {tab==="overview" && (
+        <>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
+            <StatCard label="Total Revenue"   value={fmt$(revenue)}     icon="💰" color={C.success} />
+            <StatCard label="Gross Profit"    value={fmt$(grossProfit)} icon="📈" color={grossProfit>=0?C.success:C.danger} />
+            <StatCard label="Net Profit"      value={fmt$(netProfit)}   icon="📊" color={netProfit>=0?C.success:C.danger} />
+            <StatCard label="Payables (Open)" value={fmt$(ACCOUNTS.find(a=>a.code==="2100")?.balance||0)} icon="🧾" color={C.warning} />
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+            <Card>
+              <div style={{fontSize:14,fontWeight:600,marginBottom:14}}>Summary P&L</div>
+              <MoneyRow label="Sales Revenue" value={revenue} color={C.success} />
+              <MoneyRow label="Cost of Goods Sold" value={-cogs} color={C.danger} />
+              <MoneyRow label="Gross Profit" value={grossProfit} bold border color={grossProfit>=0?C.success:C.danger} />
+              <MoneyRow label="Operating Expenses" value={-expTotal} color={C.danger} />
+              <MoneyRow label="Net Profit / (Loss)" value={netProfit} bold border color={netProfit>=0?C.success:C.danger} />
+            </Card>
+            <Card>
+              <div style={{fontSize:14,fontWeight:600,marginBottom:14}}>Summary Balance Sheet</div>
+              <MoneyRow label="Total Assets" value={totalAssets} color={C.primary} />
+              <MoneyRow label="Total Liabilities" value={totalLiab} color={C.danger} />
+              <MoneyRow label="Net Equity" value={equity} bold border color={equity>=0?C.success:C.danger} />
+              <div style={{height:12}}/>
+              <MoneyRow label="Receivables (Pipeline)" value={pipeline} color={C.info} />
+              <MoneyRow label="Inventory Value" value={ACCOUNTS.find(a=>a.code==="1300")?.balance||0} color={C.primary} />
+            </Card>
+          </div>
+        </>
+      )}
+
+      {/* ── GENERAL LEDGER ── */}
+      {tab==="gl" && (
+        <Card pad={false}>
+          <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:14,fontWeight:600}}>General Ledger ({autoJE.length} entries)</span>
+            <span style={{fontSize:12,color:C.textMid}}>Auto-generated from ERP transactions + manual entries</span>
+          </div>
+          <Table heads={["Entry ID","Date","Description","Debit Acc","Credit Acc","Amount (PKR)","Ref","Type"]}>
+            {autoJE.map(e=>(
+              <TR key={e.id} cells={[
+                <span style={{fontFamily:"monospace",fontSize:11,color:C.primary}}>{e.id}</span>,
+                <span style={{fontSize:12,color:C.textMid}}>{e.date||"—"}</span>,
+                <span style={{fontSize:12,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block"}}>{e.description}</span>,
+                <span style={{fontFamily:"monospace",fontSize:11,color:"#28a745"}}>{e.debit}</span>,
+                <span style={{fontFamily:"monospace",fontSize:11,color:"#dc3545"}}>{e.credit}</span>,
+                <span style={{fontWeight:600,fontFamily:"monospace"}}>{fmt$(e.amount)}</span>,
+                <span style={{fontFamily:"monospace",fontSize:11,color:C.textMid}}>{e.ref||"—"}</span>,
+                <Badge label={e.auto?"Auto":"Manual"}/>,
+              ]}/>
+            ))}
+          </Table>
+          {autoJE.length===0&&<div style={{padding:40,textAlign:"center",color:C.textMid}}>No transactions yet. Create sales orders, GRNs and expenses to populate the ledger.</div>}
+        </Card>
+      )}
+
+      {/* ── TRIAL BALANCE ── */}
+      {tab==="trial" && (
+        <Card pad={false}>
+          <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,fontSize:14,fontWeight:600}}>
+            Trial Balance
+          </div>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{background:"#f9fafb",borderBottom:`1px solid ${C.border}`}}>
+                {["Code","Account Name","Type","Debit (PKR)","Credit (PKR)"].map(h=>(
+                  <th key={h} style={{padding:"10px 16px",textAlign:"left",fontSize:11,fontWeight:600,color:C.textMid,textTransform:"uppercase"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {ACCOUNTS.map(a=>{
+                const isDebit = ["Asset","Expense"].includes(a.type);
+                return (
+                  <tr key={a.code} style={{borderBottom:`1px solid ${C.border}`}}
+                    onMouseEnter={e=>e.currentTarget.style.background="#f9fafb"}
+                    onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    <td style={{padding:"10px 16px",fontFamily:"monospace",fontSize:12,color:C.textMid}}>{a.code}</td>
+                    <td style={{padding:"10px 16px",fontSize:13,fontWeight:500}}>{a.name}</td>
+                    <td style={{padding:"10px 16px"}}><Badge label={a.type}/></td>
+                    <td style={{padding:"10px 16px",fontFamily:"monospace",fontSize:13,color:"#28a745",fontWeight:500}}>
+                      {isDebit?fmt$(a.balance):"—"}
+                    </td>
+                    <td style={{padding:"10px 16px",fontFamily:"monospace",fontSize:13,color:"#dc3545",fontWeight:500}}>
+                      {!isDebit?fmt$(a.balance):"—"}
+                    </td>
+                  </tr>
+                );
+              })}
+              {/* Totals */}
+              <tr style={{background:"#f0f0f0",fontWeight:700,borderTop:`2px solid ${C.border}`}}>
+                <td colSpan={3} style={{padding:"12px 16px",fontSize:13,fontWeight:700}}>TOTALS</td>
+                <td style={{padding:"12px 16px",fontFamily:"monospace",fontSize:13,color:"#28a745",fontWeight:700}}>
+                  {fmt$(ACCOUNTS.filter(a=>["Asset","Expense"].includes(a.type)).reduce((s,a)=>s+a.balance,0))}
+                </td>
+                <td style={{padding:"12px 16px",fontFamily:"monospace",fontSize:13,color:"#dc3545",fontWeight:700}}>
+                  {fmt$(ACCOUNTS.filter(a=>!["Asset","Expense"].includes(a.type)).reduce((s,a)=>s+a.balance,0))}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </Card>
+      )}
+
+      {/* ── P&L ── */}
+      {tab==="pl" && (
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+          <Card>
+            <div style={{fontSize:15,fontWeight:700,marginBottom:16,paddingBottom:10,borderBottom:`1px solid ${C.border}`}}>
+              Profit & Loss Statement
+            </div>
+            <div style={{fontSize:12,fontWeight:600,color:C.textMid,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.06em"}}>Revenue</div>
+            <MoneyRow label="Sales (Shipped/Delivered)" value={revenue} color={C.success}/>
+            <MoneyRow label="Pipeline (Open Orders)" value={pipeline} color={C.info}/>
+            <MoneyRow label="Total Revenue" value={revenue+pipeline} bold border/>
+            <div style={{height:12}}/>
+            <div style={{fontSize:12,fontWeight:600,color:C.textMid,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.06em"}}>Cost of Sales</div>
+            <MoneyRow label="Material Cost (GRNs)" value={cogs} color={C.danger}/>
+            <MoneyRow label="Purchase Orders (Open)" value={poSpend} color={C.warning}/>
+            <MoneyRow label="Gross Profit" value={grossProfit} bold border color={grossProfit>=0?C.success:C.danger}/>
+            <div style={{height:12}}/>
+            <div style={{fontSize:12,fontWeight:600,color:C.textMid,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.06em"}}>Operating Expenses</div>
+            {expenses.map(e=><MoneyRow key={e.id} label={e.description} value={e.amount} color={C.danger} indent={1}/>)}
+            {expenses.length===0&&<div style={{fontSize:12,color:C.textLight,marginBottom:8}}>No expenses recorded</div>}
+            <MoneyRow label="Total Expenses" value={expTotal} color={C.danger} bold border/>
+            <div style={{height:12}}/>
+            <MoneyRow label="NET PROFIT / (LOSS)" value={netProfit} bold border color={netProfit>=0?C.success:C.danger}/>
+          </Card>
+          <Card>
+            <div style={{fontSize:15,fontWeight:700,marginBottom:16,paddingBottom:10,borderBottom:`1px solid ${C.border}`}}>
+              Expense Breakdown
+            </div>
+            {expenses.length===0
+              ? <div style={{padding:30,textAlign:"center",color:C.textMid}}>
+                  No expenses yet.<br/>
+                  <button onClick={()=>setShowExp(true)} style={{color:C.primary,background:"none",border:"none",cursor:"pointer",fontSize:13,fontWeight:500,marginTop:8}}>
+                    + Add first expense
+                  </button>
+                </div>
+              : expenses.map(e=>(
+                <div key={e.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                  padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:500}}>{e.description}</div>
+                    <div style={{fontSize:11,color:C.textMid}}>{e.category} · {e.date} · {e.vendor||"—"}</div>
+                  </div>
+                  <span style={{fontFamily:"monospace",fontWeight:600,color:C.danger}}>{fmt$(e.amount)}</span>
+                </div>
+              ))
+            }
+          </Card>
+        </div>
+      )}
+
+      {/* ── BALANCE SHEET ── */}
+      {tab==="bs" && (
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+          <Card>
+            <div style={{fontSize:15,fontWeight:700,marginBottom:16,paddingBottom:10,borderBottom:`1px solid ${C.border}`}}>
+              Assets
+            </div>
+            <div style={{fontSize:12,fontWeight:600,color:C.textMid,marginBottom:8}}>Current Assets</div>
+            {ACCOUNTS.filter(a=>a.type==="Asset").map(a=>(
+              <MoneyRow key={a.code} label={`${a.code} — ${a.name}`} value={a.balance} indent={1}/>
+            ))}
+            <MoneyRow label="TOTAL ASSETS" value={totalAssets} bold border color={C.primary}/>
+          </Card>
+          <Card>
+            <div style={{fontSize:15,fontWeight:700,marginBottom:16,paddingBottom:10,borderBottom:`1px solid ${C.border}`}}>
+              Liabilities & Equity
+            </div>
+            <div style={{fontSize:12,fontWeight:600,color:C.textMid,marginBottom:8}}>Liabilities</div>
+            {ACCOUNTS.filter(a=>a.type==="Liability").map(a=>(
+              <MoneyRow key={a.code} label={`${a.code} — ${a.name}`} value={a.balance} indent={1} color={C.danger}/>
+            ))}
+            <MoneyRow label="Total Liabilities" value={totalLiab} bold border color={C.danger}/>
+            <div style={{height:12}}/>
+            <div style={{fontSize:12,fontWeight:600,color:C.textMid,marginBottom:8}}>Equity</div>
+            <MoneyRow label="Owner's Equity" value={equity} indent={1} color={C.primary}/>
+            <MoneyRow label="TOTAL LIABILITIES + EQUITY" value={totalAssets} bold border color={C.primary}/>
+          </Card>
+        </div>
+      )}
+
+      {/* ── CASH FLOW ── */}
+      {tab==="cashflow" && (
+        <Card>
+          <div style={{fontSize:15,fontWeight:700,marginBottom:16,paddingBottom:10,borderBottom:`1px solid ${C.border}`}}>
+            Cash Flow Statement
+          </div>
+          <div style={{fontSize:12,fontWeight:600,color:C.textMid,marginBottom:8,textTransform:"uppercase"}}>Operating Activities</div>
+          <MoneyRow label="Cash received from customers (Shipped/Delivered)" value={revenue} color={C.success} indent={1}/>
+          <MoneyRow label="Cash paid to suppliers (POs)" value={-poSpend*0.5} color={C.danger} indent={1}/>
+          <MoneyRow label="Cash paid for expenses" value={-expTotal} color={C.danger} indent={1}/>
+          <MoneyRow label="Net Cash from Operations" value={revenue - poSpend*0.5 - expTotal} bold border color={C.primary}/>
+          <div style={{height:14}}/>
+          <div style={{fontSize:12,fontWeight:600,color:C.textMid,marginBottom:8,textTransform:"uppercase"}}>Investing Activities</div>
+          <MoneyRow label="Capital expenditure" value={0} indent={1}/>
+          <MoneyRow label="Net Cash from Investing" value={0} bold border/>
+          <div style={{height:14}}/>
+          <div style={{fontSize:12,fontWeight:600,color:C.textMid,marginBottom:8,textTransform:"uppercase"}}>Financing Activities</div>
+          <MoneyRow label="Capital injections" value={0} indent={1}/>
+          <MoneyRow label="Net Cash from Financing" value={0} bold border/>
+          <div style={{height:14}}/>
+          <MoneyRow label="NET CHANGE IN CASH" value={revenue - poSpend*0.5 - expTotal} bold border color={revenue-poSpend*0.5-expTotal>=0?C.success:C.danger}/>
+          <div style={{marginTop:12,padding:"10px 14px",background:"#f9fafb",borderRadius:6,fontSize:12,color:C.textMid}}>
+            ℹ Note: Cash flow is derived from ERP transaction data. For full accrual accounting, post manual journal entries.
+          </div>
+        </Card>
+      )}
+
+      {/* ── CUSTOMER LEDGER ── */}
+      {tab==="cust" && (
+        <Card pad={false}>
+          <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,fontSize:14,fontWeight:600}}>
+            Customer Ledger ({custLedger.length} customers)
+          </div>
+          {custLedger.length===0
+            ? <div style={{padding:40,textAlign:"center",color:C.textMid}}>No customers yet. Create sales orders first.</div>
+            : <Table heads={["Customer","Orders","Total Invoiced","Received","Outstanding Balance","Status"]}>
+                {custLedger.map(c=>(
+                  <TR key={c.name} cells={[
+                    <span style={{fontWeight:600}}>{c.name}</span>,
+                    <span style={{fontWeight:500}}>{c.orders}</span>,
+                    <span style={{fontFamily:"monospace",fontWeight:500}}>{fmt$(c.paid+c.due)}</span>,
+                    <span style={{fontFamily:"monospace",color:C.success,fontWeight:600}}>{fmt$(c.paid)}</span>,
+                    <span style={{fontFamily:"monospace",color:c.due>0?C.warning:C.success,fontWeight:700}}>{fmt$(c.due)}</span>,
+                    <Badge label={c.due>0?"Outstanding":"Settled"}/>,
+                  ]}/>
+                ))}
+                <TR cells={[
+                  <span style={{fontWeight:700}}>TOTAL</span>,
+                  <span style={{fontWeight:700}}>{custLedger.reduce((s,c)=>s+c.orders,0)}</span>,
+                  <span style={{fontFamily:"monospace",fontWeight:700}}>{fmt$(custLedger.reduce((s,c)=>s+c.paid+c.due,0))}</span>,
+                  <span style={{fontFamily:"monospace",color:C.success,fontWeight:700}}>{fmt$(custLedger.reduce((s,c)=>s+c.paid,0))}</span>,
+                  <span style={{fontFamily:"monospace",color:C.warning,fontWeight:700}}>{fmt$(custLedger.reduce((s,c)=>s+c.due,0))}</span>,
+                  <span style={{fontSize:11,color:C.textMid}}>—</span>,
+                ]}/>
+              </Table>
+          }
+        </Card>
+      )}
+
+      {/* ── VENDOR LEDGER ── */}
+      {tab==="vendor" && (
+        <Card pad={false}>
+          <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,fontSize:14,fontWeight:600}}>
+            Vendor / Supplier Ledger ({vendorLedger.length} vendors)
+          </div>
+          {vendorLedger.length===0
+            ? <div style={{padding:40,textAlign:"center",color:C.textMid}}>No vendors yet. Create purchase orders first.</div>
+            : <Table heads={["Vendor","POs","Total Orders","Paid","Outstanding","Status"]}>
+                {vendorLedger.map(v=>(
+                  <TR key={v.name} cells={[
+                    <span style={{fontWeight:600}}>{v.name}</span>,
+                    <span style={{fontWeight:500}}>{v.pos}</span>,
+                    <span style={{fontFamily:"monospace",fontWeight:500}}>{fmt$(v.paid+v.due)}</span>,
+                    <span style={{fontFamily:"monospace",color:C.success,fontWeight:600}}>{fmt$(v.paid)}</span>,
+                    <span style={{fontFamily:"monospace",color:v.due>0?C.danger:C.success,fontWeight:700}}>{fmt$(v.due)}</span>,
+                    <Badge label={v.due>0?"Payable":"Cleared"}/>,
+                  ]}/>
+                ))}
+                <TR cells={[
+                  <span style={{fontWeight:700}}>TOTAL</span>,
+                  <span style={{fontWeight:700}}>{vendorLedger.reduce((s,v)=>s+v.pos,0)}</span>,
+                  <span style={{fontFamily:"monospace",fontWeight:700}}>{fmt$(vendorLedger.reduce((s,v)=>s+v.paid+v.due,0))}</span>,
+                  <span style={{fontFamily:"monospace",color:C.success,fontWeight:700}}>{fmt$(vendorLedger.reduce((s,v)=>s+v.paid,0))}</span>,
+                  <span style={{fontFamily:"monospace",color:C.danger,fontWeight:700}}>{fmt$(vendorLedger.reduce((s,v)=>s+v.due,0))}</span>,
+                  <span style={{fontSize:11,color:C.textMid}}>—</span>,
+                ]}/>
+              </Table>
+          }
+        </Card>
+      )}
+
+      {/* Journal Entry Modal */}
+      {showJE && (
+        <Modal title="📒 Manual Journal Entry" onClose={()=>setShowJE(false)} width={520}>
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div style={{display:"flex",gap:12}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Date *</div>
+                <input type="date" value={jeForm.date} onChange={e=>setJeForm(p=>({...p,date:e.target.value}))}
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Reference</div>
+                <input value={jeForm.ref} onChange={e=>setJeForm(p=>({...p,ref:e.target.value}))} placeholder="INV-001, PO-123..."
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+              </div>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Description *</div>
+              <input value={jeForm.description} onChange={e=>setJeForm(p=>({...p,description:e.target.value}))} placeholder="Description of transaction"
+                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+            </div>
+            <div style={{display:"flex",gap:12}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Debit Account</div>
+                <select value={jeForm.debit||""} onChange={e=>setJeForm(p=>({...p,debit:e.target.value}))}
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}>
+                  <option value="">Select...</option>
+                  {ACCOUNTS.map(a=><option key={a.code} value={a.code}>{a.code} — {a.name}</option>)}
+                </select>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Credit Account</div>
+                <select value={jeForm.credit||""} onChange={e=>setJeForm(p=>({...p,credit:e.target.value}))}
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}>
+                  <option value="">Select...</option>
+                  {ACCOUNTS.map(a=><option key={a.code} value={a.code}>{a.code} — {a.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Amount (PKR) *</div>
+              <input type="number" min={0} value={jeForm.amount} onChange={e=>setJeForm(p=>({...p,amount:e.target.value}))}
+                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+            </div>
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <Btn variant="secondary" onClick={()=>setShowJE(false)}>Cancel</Btn>
+              <Btn onClick={()=>{
+                if(!jeForm.date||!jeForm.description||!jeForm.amount) return;
+                dispatch({type:"ADD_JOURNAL_ENTRY",payload:{
+                  id:genId("JE"), ...jeForm, amount:parseFloat(jeForm.amount)||0,
+                  createdBy:currentUser.name, auto:false
+                }});
+                setShowJE(false);
+                setJeForm({date:"",description:"",account:"",type:"debit",amount:"",ref:""});
+              }}>Post Entry</Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Expense Modal */}
+      {showExp && (
+        <Modal title="📝 Record Expense" onClose={()=>setShowExp(false)} width={480}>
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div style={{display:"flex",gap:12}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Date *</div>
+                <input type="date" value={expForm.date} onChange={e=>setExpForm(p=>({...p,date:e.target.value}))}
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Category</div>
+                <select value={expForm.category} onChange={e=>setExpForm(p=>({...p,category:e.target.value}))}
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}>
+                  {["Salaries","Utilities","Rent","Transport","Repairs","Marketing","Miscellaneous"].map(c=><option key={c}>{c}</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Description *</div>
+              <input value={expForm.description} onChange={e=>setExpForm(p=>({...p,description:e.target.value}))} placeholder="e.g. Monthly salaries, electricity bill"
+                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+            </div>
+            <div style={{display:"flex",gap:12}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Amount (PKR) *</div>
+                <input type="number" min={0} value={expForm.amount} onChange={e=>setExpForm(p=>({...p,amount:e.target.value}))}
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Vendor / Payee</div>
+                <input value={expForm.vendor} onChange={e=>setExpForm(p=>({...p,vendor:e.target.value}))} placeholder="Who was paid?"
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <Btn variant="secondary" onClick={()=>setShowExp(false)}>Cancel</Btn>
+              <Btn onClick={()=>{
+                if(!expForm.description||!expForm.amount) return;
+                dispatch({type:"ADD_EXPENSE",payload:{
+                  id:genId("EXP"), ...expForm, amount:parseFloat(expForm.amount)||0,
+                  createdBy:currentUser.name
+                }});
+                setShowExp(false);
+                setExpForm({date:"",description:"",category:"",amount:"",vendor:"",ref:""});
+              }}>Record Expense</Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+};
+
 const NAV = [
-  { id:"dash",      label:"Dashboard",       icon:"⊞",  group:"Main" },
-  { id:"analysis",  label:"Analysis",        icon:"📊", group:"Main" },
-  { id:"sales",     label:"Sales Orders",    icon:"📋", group:"Operations" },
-  { id:"mfg",       label:"Manufacturing",   icon:"⚙️", group:"Operations" },
-  { id:"prod",      label:"Production",      icon:"🏭", group:"Operations" },
-  { id:"inv",       label:"Inventory",       icon:"📦", group:"Operations" },
-  { id:"proc",      label:"Procurement",     icon:"🛒", group:"Operations" },
-  { id:"transfers", label:"Stock Transfers", icon:"🔄", group:"Warehouse" },
-  { id:"warehouse", label:"Warehouse (GRN)", icon:"🏬", group:"Warehouse" },
-  { id:"editor",    label:"Products & BOMs", icon:"✏️", group:"Configuration" },
+  { id:"dash",       label:"Dashboard",       icon:"⊞",  group:"Main" },
+  { id:"analysis",   label:"Analysis",        icon:"📊", group:"Main" },
+  { id:"sales",      label:"Sales Orders",    icon:"📋", group:"Operations" },
+  { id:"mfg",        label:"Manufacturing",   icon:"⚙️", group:"Operations" },
+  { id:"prod",       label:"Production",      icon:"🏭", group:"Operations" },
+  { id:"inv",        label:"Inventory",       icon:"📦", group:"Operations" },
+  { id:"proc",       label:"Procurement",     icon:"🛒", group:"Operations" },
+  { id:"transfers",  label:"Stock Transfers", icon:"🔄", group:"Warehouse" },
+  { id:"warehouse",  label:"Warehouse (GRN)", icon:"🏬", group:"Warehouse" },
+  { id:"accounting", label:"Accounting",      icon:"💰", group:"Finance" },
+  { id:"editor",     label:"Products & BOMs", icon:"✏️", group:"Configuration" },
 ];
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -4404,16 +4923,17 @@ export default function App() {
 
           {/* Main content */}
           <div style={{ flex:1, overflowY:"auto", padding:24 }}>
-            {safeActive==="dash"      && <Dashboard     S={S} />}
-            {safeActive==="analysis"  && <Analysis      S={S} />}
-            {safeActive==="mfg"       && <Manufacturing S={S} />}
-            {safeActive==="inv"       && <Inventory     S={S} dispatch={dispatch} />}
-            {safeActive==="sales"     && <SalesOrders   S={S} dispatch={dispatch} />}
-            {safeActive==="prod"      && <Production    S={S} dispatch={dispatch} />}
-            {safeActive==="proc"      && <Procurement   S={S} dispatch={dispatch} />}
-            {safeActive==="transfers" && <StockTransfers S={S} dispatch={dispatch} currentUser={currentUser} />}
-            {safeActive==="warehouse" && <Warehouse      S={S} dispatch={dispatch} currentUser={currentUser} />}
-            {safeActive==="editor"    && <ProductEditor  S={S} dispatch={dispatch} />}
+            {safeActive==="dash"       && <Dashboard     S={S} />}
+            {safeActive==="analysis"   && <Analysis      S={S} />}
+            {safeActive==="mfg"        && <Manufacturing S={S} />}
+            {safeActive==="inv"        && <Inventory     S={S} dispatch={dispatch} />}
+            {safeActive==="sales"      && <SalesOrders   S={S} dispatch={dispatch} />}
+            {safeActive==="prod"       && <Production    S={S} dispatch={dispatch} />}
+            {safeActive==="proc"       && <Procurement   S={S} dispatch={dispatch} />}
+            {safeActive==="transfers"  && <StockTransfers S={S} dispatch={dispatch} currentUser={currentUser} />}
+            {safeActive==="warehouse"  && <Warehouse      S={S} dispatch={dispatch} currentUser={currentUser} />}
+            {safeActive==="accounting" && <Accounting     S={S} dispatch={dispatch} currentUser={currentUser} />}
+            {safeActive==="editor"     && <ProductEditor  S={S} dispatch={dispatch} />}
           </div>
         </div>
       </div>
