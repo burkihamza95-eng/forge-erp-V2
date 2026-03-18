@@ -1785,9 +1785,24 @@ function appReducer(state, { type, payload }) {
     case "SET_BOM":       return { ...state, bom: { ...state.bom, [payload.fgId]: payload.lines } };
     case "ADD_RM":        return { ...state, rawMaterials: [...state.rawMaterials, payload] };
     case "UPDATE_RM":     return { ...state, rawMaterials: state.rawMaterials.map(m => m.id===payload.id ? {...m,...payload} : m) };
+    // Stock transfers between locations
+    case "ADD_TRANSFER":  return { ...state, transfers: [payload, ...(state.transfers||[])] };
+    case "UPDATE_TRANSFER": return { ...state, transfers: (state.transfers||[]).map(t => t.id===payload.id ? {...t,...payload} : t) };
+    // GRN (Goods Received Notes)
+    case "ADD_GRN":       return { ...state, grns: [payload, ...(state.grns||[])] };
+    // Dispatch notes
+    case "ADD_DISPATCH":  return { ...state, dispatches: [payload, ...(state.dispatches||[])] };
+    // Location stock adjustments
+    case "ADJUST_LOC_STOCK": {
+      const locStocks = {...(state.locationStocks||{})};
+      const key = `${payload.locationId}__${payload.itemId}`;
+      locStocks[key] = Math.max(0, (locStocks[key]||0) + payload.delta);
+      return { ...state, locationStocks: locStocks };
+    }
     default: return state;
   }
 }
+
 
 // ─── UTILITIES ────────────────────────────────────────────────────────────────
 const fmt$  = n => "$" + Number(n||0).toLocaleString("en-US", {minimumFractionDigits:0, maximumFractionDigits:0});
@@ -2934,7 +2949,7 @@ const Manufacturing = ({ S }) => {
 // MODULE: INVENTORY
 // ════════════════════════════════════════════════════════════════════════════
 const Inventory = ({ S, dispatch }) => {
-  const { rawMaterials } = S;
+  const { rawMaterials, workOrders, bom, finishedGoods } = S;
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [editStock, setEditStock] = useState(null);
@@ -2942,39 +2957,107 @@ const Inventory = ({ S, dispatch }) => {
   const [catFilter, setCatFilter] = useState("all");
   const [showAddPart, setShowAddPart] = useState(false);
 
+  // ── Compute "Production Required" materials ──
+  // Materials needed by active/scheduled work orders that have insufficient stock
+  const activeWOs = (workOrders||[]).filter(w=>["In Progress","Scheduled"].includes(w.status));
+  const productionRequiredIds = new Set();
+  const productionRequiredQty = {}; // materialId -> total qty needed
+  activeWOs.forEach(wo => {
+    const bomLines = bom[wo.fgId] || [];
+    bomLines.forEach(line => {
+      const needed = line.qty * wo.qty;
+      const mat = rawMaterials.find(m=>m.id===line.materialId);
+      if (!mat) return;
+      if (mat.stock < needed) {
+        productionRequiredIds.add(line.materialId);
+        productionRequiredQty[line.materialId] = (productionRequiredQty[line.materialId]||0) + needed;
+      }
+    });
+  });
+
   const categories = ["all", ...new Set(rawMaterials.map(m=>m.category))].sort();
 
   const filtered = rawMaterials
-    .filter(m => filter==="low" ? m.stock<=m.minStock : filter==="zero" ? m.stock===0 : true)
+    .filter(m => {
+      if (filter==="urgent") return productionRequiredIds.has(m.id);
+      if (filter==="low")    return m.stock<=m.minStock;
+      if (filter==="zero")   return m.stock===0;
+      return true;
+    })
     .filter(m => catFilter==="all" || m.category===catFilter)
-    .filter(m => m.name.toLowerCase().includes(search.toLowerCase()) ||
+    .filter(m => !search || m.name.toLowerCase().includes(search.toLowerCase()) ||
                  m.internalRef.toLowerCase().includes(search.toLowerCase()));
 
-  const critCount = rawMaterials.filter(m=>m.stock<=m.minStock).length;
-  const zeroCount = rawMaterials.filter(m=>m.stock===0).length;
+  const critCount   = rawMaterials.filter(m=>m.stock<=m.minStock).length;
+  const zeroCount   = rawMaterials.filter(m=>m.stock===0).length;
+  const urgentCount = productionRequiredIds.size;
 
   return (
     <div style={{ animation:"slide-in .3s ease" }}>
-      <PageHeader title="Inventory" subtitle={`${rawMaterials.length} raw materials · ${critCount} low stock`}
+      <PageHeader title="Inventory" subtitle={`${rawMaterials.length} raw materials · ${critCount} low stock · ${urgentCount} production urgent`}
         actions={<Btn icon="+" onClick={()=>setShowAddPart(true)}>Add Part</Btn>} />
 
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:20 }}>
-        <StatCard label="Total SKUs"    value={rawMaterials.length}       icon="📦" color={C.primary} />
-        <StatCard label="Low Stock"     value={critCount}                 icon="⚠️" color={C.warning} />
-        <StatCard label="Zero Stock"    value={zeroCount}                 icon="🚫" color={C.danger} />
-        <StatCard label="Categories"    value={categories.length-1}       icon="🏷️" color={C.info} />
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:12, marginBottom:20 }}>
+        <StatCard label="Total SKUs"    value={rawMaterials.length}  icon="📦" color={C.primary} />
+        <StatCard label="Low Stock"     value={critCount}            icon="⚠️" color={C.warning} />
+        <StatCard label="Zero Stock"    value={zeroCount}            icon="🚫" color={C.danger} />
+        <StatCard label="Categories"    value={categories.length-1}  icon="🏷️" color={C.info} />
+        <StatCard label="Prod. Urgent"  value={urgentCount}          icon="🔴" color="#e53e3e" />
       </div>
+
+      {/* Urgently Required Banner */}
+      {urgentCount > 0 && (
+        <div style={{ background:"#fff5f5", border:"2px solid #fc8181", borderRadius:10,
+          padding:"14px 18px", marginBottom:20 }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+              <span style={{ fontSize:20 }}>🔴</span>
+              <div>
+                <div style={{ fontSize:14, fontWeight:700, color:"#c53030" }}>
+                  {urgentCount} Material{urgentCount>1?"s":""} Urgently Required for Production
+                </div>
+                <div style={{ fontSize:12, color:"#742a2a" }}>
+                  Insufficient stock for active/scheduled work orders. Procurement action needed.
+                </div>
+              </div>
+            </div>
+            <Btn variant="secondary" small onClick={()=>setFilter("urgent")}>View All →</Btn>
+          </div>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+            {[...productionRequiredIds].slice(0,6).map(id => {
+              const m = rawMaterials.find(r=>r.id===id);
+              if (!m) return null;
+              const needed = productionRequiredQty[id];
+              const short  = needed - m.stock;
+              return (
+                <div key={id} style={{ background:"#fff", border:"1px solid #fc8181",
+                  borderRadius:6, padding:"6px 10px", fontSize:11 }}>
+                  <div style={{ fontFamily:"monospace", color:"#742a2a", fontWeight:600 }}>{m.internalRef}</div>
+                  <div style={{ color:"#c53030" }}>Need {needed} · Have {m.stock} · Short {short}</div>
+                </div>
+              );
+            })}
+            {productionRequiredIds.size > 6 && (
+              <div style={{ background:"#fed7d7", borderRadius:6, padding:"6px 10px",
+                fontSize:11, color:"#742a2a", display:"flex", alignItems:"center" }}>
+                +{productionRequiredIds.size-6} more
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <Card style={{ marginBottom:16, padding:14 }}>
         <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"center" }}>
           <div style={{ flex:2, minWidth:200 }}>
             <Input placeholder="Search by name or internal ref..." value={search} onChange={e=>setSearch(e.target.value)} />
           </div>
-          <div style={{ flex:1, minWidth:140 }}>
+          <div style={{ flex:1, minWidth:160 }}>
             <Sel value={filter} onChange={e=>setFilter(e.target.value)}>
               <option value="all">All stock levels</option>
-              <option value="low">Low / Critical</option>
-              <option value="zero">Zero stock</option>
+              <option value="urgent">🔴 Production Urgent ({urgentCount})</option>
+              <option value="low">⚠️ Low / Critical</option>
+              <option value="zero">🚫 Zero stock</option>
             </Sel>
           </div>
           <div style={{ flex:1, minWidth:140 }}>
@@ -2989,23 +3072,33 @@ const Inventory = ({ S, dispatch }) => {
       </Card>
 
       <Card pad={false}>
-        <Table heads={["Internal Ref","Part Name","Category","Unit","Stock","Min Stock","Status","Action"]}>
-          {filtered.slice(0,200).map(m => (
+        <Table heads={["Internal Ref","Part Name","Category","Unit","Stock","Min Stock","Urgency","Status","Action"]}>
+          {filtered.slice(0,200).map(m => {
+            const isUrgent = productionRequiredIds.has(m.id);
+            const needed   = productionRequiredQty[m.id] || 0;
+            const short    = needed - m.stock;
+            return (
             <TR key={m.id} cells={[
               <span style={{fontSize:11,fontFamily:"monospace",color:C.textMid}}>{m.internalRef}</span>,
-              <span style={{fontSize:12,maxWidth:260,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block"}}>{m.name}</span>,
+              <span style={{fontSize:12,maxWidth:240,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block",
+                fontWeight:isUrgent?600:400, color:isUrgent?"#c53030":C.text}}>{m.name}</span>,
               <span style={{fontSize:11,color:C.textMid}}>{m.category}</span>,
               <span style={{fontSize:12}}>{m.unit}</span>,
               <span style={{fontWeight:700,fontSize:14,color:m.stock===0?C.danger:m.stock<=m.minStock?C.warning:C.success}}>{m.stock}</span>,
               <span style={{fontSize:12,color:C.textMid}}>{m.minStock}</span>,
-              <Badge label={m.stock===0?"Critical":m.stock<=m.minStock?"Low Stock":"Normal"} />,
+              isUrgent
+                ? <span style={{fontSize:11,fontWeight:600,color:"#c53030",whiteSpace:"nowrap"}}>🔴 Need {needed} · Short {short}</span>
+                : <span style={{fontSize:11,color:C.textLight}}>—</span>,
+              <Badge label={isUrgent?"Prod. Urgent":m.stock===0?"Critical":m.stock<=m.minStock?"Low Stock":"Normal"}
+                     style={isUrgent?{background:"#fff5f5",color:"#c53030",border:"1px solid #fc8181"}:{}} />,
               <Btn size="sm" variant="secondary" onClick={()=>{setEditStock(m);setNewStock(m.stock);}}>Adjust</Btn>
             ]}/>
-          ))}
+          )})}
         </Table>
         {filtered.length>200 && <div style={{padding:"12px 20px",color:C.textMid,fontSize:12}}>
           Showing 200 of {filtered.length} results. Use search/filter to narrow down.
         </div>}
+        {filtered.length===0 && <div style={{padding:30,textAlign:"center",color:C.textMid}}>No materials match your filter.</div>}
       </Card>
 
       {editStock && (
@@ -3569,38 +3662,52 @@ const Procurement = ({ S, dispatch }) => {
 
 
 // ════════════════════════════════════════════════════════════════════════════
-// NAVIGATION CONFIG
-// ════════════════════════════════════════════════════════════════════════════
-// ════════════════════════════════════════════════════════════════════════════
-// LOGIN PAGE
+// USERS, PASSWORDS & ACCESS CONTROL
 // ════════════════════════════════════════════════════════════════════════════
 const USERS = [
-  { id:"hamza",    name:"Hamza",    role:"Admin",      avatar:"H", color:"#714b67" },
-  { id:"ahsan",    name:"Ahsan",    role:"Production", avatar:"A", color:"#017e84" },
-  { id:"abdullah", name:"Abdullah", role:"Inventory",  avatar:"Ab", color:"#0066cc" },
-  { id:"hafiz",    name:"Hafiz",    role:"Procurement", avatar:"Hf", color:"#28a745" },
-  { id:"yasir",    name:"Yasir",    role:"Sales",      avatar:"Y", color:"#f59e0b" },
+  { id:"hamza",    name:"Hamza",    role:"Admin",       avatar:"H",  color:"#714b67", password:"Hamza@123",
+    access:["dash","analysis","sales","mfg","prod","inv","proc","editor","warehouse","transfers"] },
+  { id:"abdullah", name:"Abdullah", role:"Admin",       avatar:"Ab", color:"#0066cc", password:"Abdullah@123",
+    access:["dash","analysis","sales","mfg","prod","inv","proc","editor","warehouse","transfers"] },
+  { id:"ahsan",    name:"Ahsan",    role:"Operations",  avatar:"A",  color:"#017e84", password:"Ahsan@123",
+    access:["sales","inv","proc"] },
+  { id:"hafiz",    name:"Hafiz",    role:"Inventory",   avatar:"Hf", color:"#28a745", password:"Hafiz@123",
+    access:["inv","sales"] },
+  { id:"yasir",    name:"Yasir",    role:"Sales",       avatar:"Y",  color:"#f59e0b", password:"Yasir@123",
+    access:["dash","analysis","inv","sales"] },
 ];
 
 const LoginPage = ({ onLogin }) => {
   const [selected, setSelected] = useState(null);
-  const [pin, setPin] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState("");
+  const pwRef = useRef();
+
+  const handleUserSelect = (u) => {
+    setSelected(u);
+    setPassword("");
+    setError("");
+    setTimeout(()=>pwRef.current?.focus(), 100);
+  };
 
   const handleLogin = () => {
-    if (!selected) return;
-    // Simple PIN: first 4 letters of name uppercased, or just Enter with no PIN
+    if (!selected) { setError("Please select a user."); return; }
+    if (!password) { setError("Please enter your password."); return; }
+    if (password !== selected.password) { setError("Incorrect password. Please try again."); setPassword(""); return; }
     setError("");
     onLogin(selected);
   };
 
+  const handleKeyDown = (e) => { if (e.key==="Enter") handleLogin(); };
+
   return (
-    <div style={{ minHeight:"100vh", background:"linear-gradient(135deg, #f0f0f0 0%, #e8e4f0 100%)",
+    <div style={{ minHeight:"100vh", background:"linear-gradient(135deg,#f0f0f0 0%,#e8e4f0 100%)",
       display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Inter',sans-serif" }}>
-      <div style={{ width:"100%", maxWidth:480, padding:20 }}>
+      <div style={{ width:"100%", maxWidth:500, padding:20 }}>
 
         {/* Logo */}
-        <div style={{ textAlign:"center", marginBottom:36 }}>
+        <div style={{ textAlign:"center", marginBottom:32 }}>
           <div style={{ width:64, height:64, background:C.primary, borderRadius:16,
             display:"flex", alignItems:"center", justifyContent:"center",
             margin:"0 auto 14px", boxShadow:`0 8px 24px ${C.primary}44` }}>
@@ -3610,54 +3717,82 @@ const LoginPage = ({ onLogin }) => {
           <div style={{ fontSize:13, color:C.textMid, marginTop:4 }}>Manufacturing Operations System</div>
         </div>
 
-        {/* User cards */}
-        <div style={{ background:"#fff", borderRadius:12, padding:24,
-          boxShadow:"0 4px 24px rgba(0,0,0,0.08)", marginBottom:16 }}>
-          <div style={{ fontSize:14, fontWeight:600, color:C.text, marginBottom:16, textAlign:"center" }}>
-            Select your profile to continue
+        <div style={{ background:"#fff", borderRadius:12, padding:28,
+          boxShadow:"0 4px 24px rgba(0,0,0,0.09)" }}>
+
+          {/* Step 1: Select user */}
+          <div style={{ fontSize:13, fontWeight:600, color:C.textMid, marginBottom:12,
+            textTransform:"uppercase", letterSpacing:"0.06em", fontSize:11 }}>
+            Step 1 — Select your profile
           </div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:20 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:20 }}>
             {USERS.map(u=>(
-              <button key={u.id} onClick={()=>{ setSelected(u); setError(""); }}
-                style={{ padding:"14px 12px", border:`2px solid ${selected?.id===u.id?u.color:C.border}`,
+              <button key={u.id} onClick={()=>handleUserSelect(u)}
+                style={{ padding:"11px 12px", border:`2px solid ${selected?.id===u.id?u.color:C.border}`,
                   borderRadius:10, background: selected?.id===u.id ? `${u.color}12` : "#fff",
                   cursor:"pointer", transition:"all .15s", textAlign:"left",
-                  display:"flex", alignItems:"center", gap:12 }}
-                onMouseEnter={e=>{ if(selected?.id!==u.id) e.currentTarget.style.borderColor=u.color; }}
+                  display:"flex", alignItems:"center", gap:10 }}
+                onMouseEnter={e=>{ if(selected?.id!==u.id) e.currentTarget.style.borderColor=u.color+"88"; }}
                 onMouseLeave={e=>{ if(selected?.id!==u.id) e.currentTarget.style.borderColor=C.border; }}>
-                <div style={{ width:38, height:38, borderRadius:"50%", background:u.color,
+                <div style={{ width:36, height:36, borderRadius:"50%", background:u.color,
                   display:"flex", alignItems:"center", justifyContent:"center",
-                  color:"#fff", fontSize:14, fontWeight:700, flexShrink:0 }}>
+                  color:"#fff", fontSize:13, fontWeight:700, flexShrink:0 }}>
                   {u.avatar}
                 </div>
-                <div>
-                  <div style={{ fontSize:14, fontWeight:600, color:C.text }}>{u.name}</div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:C.text }}>{u.name}</div>
                   <div style={{ fontSize:11, color:C.textMid }}>{u.role}</div>
                 </div>
-                {selected?.id===u.id && (
-                  <span style={{ marginLeft:"auto", color:u.color, fontSize:16 }}>✓</span>
-                )}
+                {selected?.id===u.id && <span style={{ color:u.color, fontSize:16 }}>✓</span>}
               </button>
             ))}
           </div>
 
-          {error && (
-            <div style={{ background:"#fef2f2", border:"1px solid #fecaca", borderRadius:6,
-              padding:"8px 12px", fontSize:12, color:"#dc3545", marginBottom:12 }}>
-              {error}
+          {/* Step 2: Password */}
+          {selected && (
+            <div style={{ animation:"slide-in .2s ease" }}>
+              <div style={{ fontSize:11, fontWeight:600, color:C.textMid, marginBottom:8,
+                textTransform:"uppercase", letterSpacing:"0.06em" }}>
+                Step 2 — Enter password for {selected.name}
+              </div>
+              <div style={{ position:"relative", marginBottom:14 }}>
+                <input ref={pwRef} type={showPw?"text":"password"} value={password}
+                  onChange={e=>{ setPassword(e.target.value); setError(""); }}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Enter your password..."
+                  style={{ width:"100%", padding:"10px 40px 10px 12px", border:`1px solid ${error?C.danger:C.border}`,
+                    borderRadius:8, fontSize:14, outline:"none", boxSizing:"border-box",
+                    transition:"border-color .15s" }}
+                  onFocus={e=>e.target.style.borderColor=selected.color}
+                  onBlur={e=>e.target.style.borderColor=error?C.danger:C.border}
+                />
+                <button onClick={()=>setShowPw(v=>!v)}
+                  style={{ position:"absolute", right:10, top:"50%", transform:"translateY(-50%)",
+                    background:"none", border:"none", cursor:"pointer", color:C.textMid, fontSize:16 }}>
+                  {showPw?"🙈":"👁️"}
+                </button>
+              </div>
             </div>
           )}
 
-          <button onClick={handleLogin} disabled={!selected}
-            style={{ width:"100%", padding:"12px", background: selected?C.primary:"#e5e7eb",
-              color: selected?"#fff":"#9ca3af", border:"none", borderRadius:8,
-              fontSize:15, fontWeight:600, cursor: selected?"pointer":"not-allowed",
-              transition:"all .2s" }}>
-            {selected ? `Continue as ${selected.name} →` : "Select a profile above"}
+          {error && (
+            <div style={{ background:"#fef2f2", border:"1px solid #fecaca", borderRadius:6,
+              padding:"8px 12px", fontSize:12, color:C.danger, marginBottom:12 }}>
+              ⚠ {error}
+            </div>
+          )}
+
+          <button onClick={handleLogin} disabled={!selected||!password}
+            style={{ width:"100%", padding:"12px", marginTop:4,
+              background: (selected&&password)?C.primary:"#e5e7eb",
+              color: (selected&&password)?"#fff":"#9ca3af",
+              border:"none", borderRadius:8, fontSize:15, fontWeight:600,
+              cursor:(selected&&password)?"pointer":"not-allowed", transition:"all .2s" }}>
+            {selected&&password ? `Sign in as ${selected.name} →` : "Select profile & enter password"}
           </button>
         </div>
 
-        <div style={{ textAlign:"center", fontSize:11, color:C.textDim }}>
+        <div style={{ textAlign:"center", fontSize:11, color:C.textDim, marginTop:14 }}>
           SHIBLI ERP v4 · Manufacturing Operations
         </div>
       </div>
@@ -3665,15 +3800,441 @@ const LoginPage = ({ onLogin }) => {
   );
 };
 
+// ════════════════════════════════════════════════════════════════════════════
+// LOCATIONS CONFIG
+// ════════════════════════════════════════════════════════════════════════════
+const LOCATIONS = [
+  { id:"warehouse",        name:"Ware-House",      icon:"🏬", color:"#0066cc" },
+  { id:"production_store", name:"Production-Store", icon:"📦", color:"#714b67" },
+  { id:"clean_room",       name:"Clean-Room",       icon:"🧪", color:"#017e84" },
+  { id:"pre_production",   name:"Pre-Production",   icon:"⚙️", color:"#f59e0b" },
+];
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE: STOCK TRANSFERS
+// ════════════════════════════════════════════════════════════════════════════
+const StockTransfers = ({ S, dispatch, currentUser }) => {
+  const { rawMaterials, finishedGoods, transfers=[], locationStocks={} } = S;
+  const [showNew, setShowNew] = useState(false);
+  const [form, setForm] = useState({ fromLoc:"warehouse", toLoc:"production_store", qty:1, notes:"" });
+  const [itemSearch, setItemSearch] = useState("");
+  const [showItemDrop, setShowItemDrop] = useState(false);
+  const [selItem, setSelItem] = useState(null);
+
+  const allItems = [
+    ...rawMaterials.map(m=>({...m, type:"material", label:`[RM] ${m.internalRef} — ${m.name}`})),
+    ...finishedGoods.map(f=>({...f, type:"fg", label:`[FG] ${f.id} — ${f.name}`})),
+  ];
+  const filteredItems = allItems.filter(i=>!itemSearch||i.label.toLowerCase().includes(itemSearch.toLowerCase())).slice(0,15);
+  const locName = id => LOCATIONS.find(l=>l.id===id)?.name||id;
+  const locIcon = id => LOCATIONS.find(l=>l.id===id)?.icon||"📍";
+
+  const handleCreate = () => {
+    if (!selItem||!form.qty||form.fromLoc===form.toLoc) return;
+    const qty = parseInt(form.qty)||1;
+    dispatch({ type:"ADD_TRANSFER", payload:{
+      id:genId("TRF"), fromLoc:form.fromLoc, toLoc:form.toLoc,
+      itemId:selItem.id, itemName:selItem.name, itemRef:selItem.internalRef||selItem.id,
+      itemType:selItem.type, qty, notes:form.notes,
+      date:new Date().toISOString().split("T")[0],
+      time:new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}),
+      createdBy:currentUser.name, status:"Completed"
+    }});
+    dispatch({type:"ADJUST_LOC_STOCK",payload:{locationId:form.fromLoc,itemId:selItem.id,delta:-qty}});
+    dispatch({type:"ADJUST_LOC_STOCK",payload:{locationId:form.toLoc,itemId:selItem.id,delta:qty}});
+    setShowNew(false); setSelItem(null); setItemSearch("");
+    setForm({fromLoc:"warehouse",toLoc:"production_store",qty:1,notes:""});
+  };
+
+  return (
+    <div style={{animation:"slide-in .3s ease"}}>
+      <PageHeader title="Stock Transfers" subtitle="Move materials and products between locations"
+        actions={<Btn icon="🔄" onClick={()=>setShowNew(true)}>New Transfer</Btn>} />
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
+        {LOCATIONS.map(loc=>(
+          <div key={loc.id} style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:10,padding:16}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+              <div style={{width:36,height:36,borderRadius:8,background:`${loc.color}18`,
+                display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>{loc.icon}</div>
+              <div style={{fontSize:13,fontWeight:600,color:loc.color}}>{loc.name}</div>
+            </div>
+            <div style={{fontSize:11,color:C.textMid}}>
+              {transfers.filter(t=>t.toLoc===loc.id).length} in · {transfers.filter(t=>t.fromLoc===loc.id).length} out
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <Card pad={false}>
+        <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,fontSize:14,fontWeight:600}}>
+          Transfer History ({transfers.length})
+        </div>
+        {transfers.length===0
+          ? <div style={{padding:40,textAlign:"center",color:C.textMid}}>No transfers yet. Use "New Transfer" to move stock between locations.</div>
+          : <Table heads={["Transfer ID","Date","From","→","To","Item","Qty","Notes","By"]}>
+              {transfers.map(t=>(
+                <TR key={t.id} cells={[
+                  <span style={{fontFamily:"monospace",fontSize:11,color:C.primary,fontWeight:600}}>{t.id}</span>,
+                  <span style={{fontSize:11,color:C.textMid}}>{t.date} {t.time}</span>,
+                  <span>{locIcon(t.fromLoc)} {locName(t.fromLoc)}</span>,
+                  <span style={{color:C.textMid}}>→</span>,
+                  <span>{locIcon(t.toLoc)} {locName(t.toLoc)}</span>,
+                  <div>
+                    <div style={{fontSize:10,fontFamily:"monospace",color:C.textMid}}>{t.itemRef}</div>
+                    <div style={{fontSize:12,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.itemName}</div>
+                  </div>,
+                  <span style={{fontWeight:700}}>{t.qty}</span>,
+                  <span style={{fontSize:11,color:C.textMid}}>{t.notes||"—"}</span>,
+                  <span style={{fontSize:12}}>{t.createdBy}</span>,
+                ]}/>
+              ))}
+            </Table>
+        }
+      </Card>
+
+      {showNew && (
+        <Modal title="New Stock Transfer" onClose={()=>setShowNew(false)} width={520}>
+          <div style={{display:"flex",flexDirection:"column",gap:16}}>
+            <div style={{display:"flex",gap:12,alignItems:"flex-end"}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>From Location</div>
+                <select value={form.fromLoc} onChange={e=>setForm(p=>({...p,fromLoc:e.target.value}))}
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}>
+                  {LOCATIONS.map(l=><option key={l.id} value={l.id}>{l.icon} {l.name}</option>)}
+                </select>
+              </div>
+              <div style={{fontSize:22,color:C.textMid,paddingBottom:4}}>→</div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>To Location</div>
+                <select value={form.toLoc} onChange={e=>setForm(p=>({...p,toLoc:e.target.value}))}
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}>
+                  {LOCATIONS.filter(l=>l.id!==form.fromLoc).map(l=><option key={l.id} value={l.id}>{l.icon} {l.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Item *</div>
+              <div style={{position:"relative"}}>
+                <input value={selItem?selItem.label:itemSearch}
+                  onChange={e=>{setItemSearch(e.target.value);setSelItem(null);setShowItemDrop(true);}}
+                  onFocus={()=>setShowItemDrop(true)} onBlur={()=>setTimeout(()=>setShowItemDrop(false),150)}
+                  placeholder="Type to search materials or finished goods..."
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+                {showItemDrop&&itemSearch&&(
+                  <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:100,background:"#fff",
+                    border:`1px solid ${C.primary}`,borderRadius:6,boxShadow:"0 4px 16px rgba(0,0,0,.12)",maxHeight:200,overflowY:"auto"}}>
+                    {filteredItems.length===0
+                      ? <div style={{padding:12,color:C.textMid,fontSize:12}}>No items found</div>
+                      : filteredItems.map((i,idx)=>(
+                        <div key={idx} onMouseDown={()=>{setSelItem(i);setItemSearch("");setShowItemDrop(false);}}
+                          style={{padding:"8px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,fontSize:12}}
+                          onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+                          onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                          <div style={{fontFamily:"monospace",fontSize:10,color:C.textMid}}>{i.internalRef||i.id}</div>
+                          <div>{i.name.slice(0,60)}</div>
+                        </div>
+                      ))
+                    }
+                  </div>
+                )}
+              </div>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Quantity *</div>
+              <input type="number" min={1} value={form.qty} onChange={e=>setForm(p=>({...p,qty:e.target.value}))}
+                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Notes</div>
+              <input value={form.notes} onChange={e=>setForm(p=>({...p,notes:e.target.value}))} placeholder="Optional..."
+                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+            </div>
+            {form.fromLoc===form.toLoc&&<div style={{color:C.danger,fontSize:12}}>⚠ From and To must be different locations.</div>}
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <Btn variant="secondary" onClick={()=>setShowNew(false)}>Cancel</Btn>
+              <Btn onClick={handleCreate} disabled={!selItem||form.fromLoc===form.toLoc}>Confirm Transfer</Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE: WAREHOUSE — GRN & DISPATCH
+// ════════════════════════════════════════════════════════════════════════════
+const Warehouse = ({ S, dispatch, currentUser }) => {
+  const { rawMaterials, finishedGoods, purchaseOrders, salesOrders, grns=[], dispatches=[] } = S;
+  const [tab, setTab] = useState("grn");
+  const [showGRN, setShowGRN] = useState(false);
+  const [showDispatch, setShowDispatch] = useState(false);
+  const [grnForm, setGrnForm] = useState({ poId:"", itemId:"", qtyReceived:"", notes:"", condition:"Good" });
+  const [grnSearch, setGrnSearch] = useState(""); const [grnSel, setGrnSel] = useState(null); const [showGrnDrop, setShowGrnDrop] = useState(false);
+  const [dispForm, setDispForm] = useState({ soId:"", customer:"", qty:"", notes:"", carrier:"" });
+  const [dispSearch, setDispSearch] = useState(""); const [dispSel, setDispSel] = useState(null); const [showDispDrop, setShowDispDrop] = useState(false);
+
+  const filteredGrn = rawMaterials.filter(m=>!grnSearch||m.internalRef.toLowerCase().includes(grnSearch.toLowerCase())||m.name.toLowerCase().includes(grnSearch.toLowerCase())).slice(0,15);
+  const filteredDisp = finishedGoods.filter(f=>!dispSearch||f.id.toLowerCase().includes(dispSearch.toLowerCase())||f.name.toLowerCase().includes(dispSearch.toLowerCase())).slice(0,10);
+
+  const SearchDrop = ({items,show,onSel}) => !show||!items.length ? null : (
+    <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:100,background:"#fff",
+      border:`1px solid ${C.primary}`,borderRadius:6,boxShadow:"0 4px 16px rgba(0,0,0,.12)",maxHeight:200,overflowY:"auto"}}>
+      {items.map((i,idx)=>(
+        <div key={idx} onMouseDown={()=>onSel(i)}
+          style={{padding:"8px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,fontSize:12}}
+          onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+          onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+          <div style={{fontFamily:"monospace",fontSize:10,color:C.textMid}}>{i.internalRef||i.id}</div>
+          <div>{(i.name||"").slice(0,60)}</div>
+        </div>
+      ))}
+    </div>
+  );
+
+  const handleGRN = () => {
+    if (!grnSel||!grnForm.qtyReceived) return;
+    const qty = parseInt(grnForm.qtyReceived)||0;
+    dispatch({type:"ADD_GRN",payload:{
+      id:genId("GRN"), date:new Date().toISOString().split("T")[0],
+      time:new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}),
+      poId:grnForm.poId, itemId:grnSel.id, itemRef:grnSel.internalRef,
+      itemName:grnSel.name, qtyReceived:qty, condition:grnForm.condition,
+      notes:grnForm.notes, receivedBy:currentUser.name, status:"Received"
+    }});
+    dispatch({type:"ADJUST_LOC_STOCK",payload:{locationId:"warehouse",itemId:grnSel.id,delta:qty}});
+    dispatch({type:"ADJUST_STOCK",payload:{id:grnSel.id,stock:(grnSel.stock||0)+qty}});
+    setShowGRN(false); setGrnSel(null); setGrnSearch("");
+    setGrnForm({poId:"",itemId:"",qtyReceived:"",notes:"",condition:"Good"});
+  };
+
+  const handleDispatch = () => {
+    if (!dispSel||!dispForm.qty||!dispForm.customer) return;
+    dispatch({type:"ADD_DISPATCH",payload:{
+      id:genId("DSP"), date:new Date().toISOString().split("T")[0],
+      time:new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}),
+      soId:dispForm.soId, customer:dispForm.customer, fgId:dispSel.id,
+      fgName:dispSel.name, qty:parseInt(dispForm.qty)||1,
+      carrier:dispForm.carrier, notes:dispForm.notes,
+      dispatchedBy:currentUser.name, status:"Dispatched"
+    }});
+    if (dispForm.soId) dispatch({type:"UPDATE_SO",payload:{id:dispForm.soId,status:"Shipped"}});
+    setShowDispatch(false); setDispSel(null); setDispSearch("");
+    setDispForm({soId:"",customer:"",qty:"",notes:"",carrier:""});
+  };
+
+  return (
+    <div style={{animation:"slide-in .3s ease"}}>
+      <PageHeader title="Warehouse" subtitle="GRN · Stock Receiving · Dispatch · Delivery Notes"
+        actions={
+          <div style={{display:"flex",gap:8}}>
+            <Btn variant="secondary" icon="📥" onClick={()=>setShowGRN(true)}>Receive Goods (GRN)</Btn>
+            <Btn icon="🚚" onClick={()=>setShowDispatch(true)}>Dispatch Product</Btn>
+          </div>
+        }
+      />
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
+        <StatCard label="Total GRNs"       value={grns.length}       icon="📥" color={C.success}  />
+        <StatCard label="Total Dispatches" value={dispatches.length} icon="🚚" color={C.primary}  />
+        <StatCard label="Open POs"         value={purchaseOrders.filter(p=>!["Received","Cancelled"].includes(p.status)).length} icon="🛒" color={C.info} />
+        <StatCard label="Ready to Ship"    value={salesOrders.filter(o=>["In Production","Picking"].includes(o.status)).length} icon="📦" color={C.warning} />
+      </div>
+
+      <div style={{display:"flex",gap:4,borderBottom:`1px solid ${C.border}`,marginBottom:20}}>
+        {[["grn","📥 GRN — Received"],["dispatch","🚚 Dispatches"]].map(([id,label])=>(
+          <button key={id} onClick={()=>setTab(id)}
+            style={{padding:"10px 20px",border:"none",background:"transparent",fontSize:13,cursor:"pointer",
+              fontWeight:tab===id?600:400,color:tab===id?C.primary:C.textMid,
+              borderBottom:tab===id?`2px solid ${C.primary}`:"2px solid transparent",marginBottom:-1}}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab==="grn" && (
+        <Card pad={false}>
+          <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,fontSize:14,fontWeight:600}}>
+            Goods Received Notes ({grns.length})
+          </div>
+          {grns.length===0
+            ? <div style={{padding:40,textAlign:"center",color:C.textMid}}>No GRNs yet. Click "Receive Goods" to create one.</div>
+            : <Table heads={["GRN ID","Date","PO Ref","Item Ref","Item Name","Qty Received","Condition","Notes","By"]}>
+                {grns.map(g=>(
+                  <TR key={g.id} cells={[
+                    <span style={{fontFamily:"monospace",fontSize:11,color:C.success,fontWeight:600}}>{g.id}</span>,
+                    <span style={{fontSize:11,color:C.textMid}}>{g.date} {g.time}</span>,
+                    <span style={{fontFamily:"monospace",fontSize:11}}>{g.poId||"—"}</span>,
+                    <span style={{fontFamily:"monospace",fontSize:11,color:C.textMid}}>{g.itemRef}</span>,
+                    <span style={{fontSize:12,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block"}}>{g.itemName}</span>,
+                    <span style={{fontWeight:700,color:C.success,fontSize:14}}>{g.qtyReceived}</span>,
+                    <Badge label={g.condition}/>,
+                    <span style={{fontSize:11,color:C.textMid}}>{g.notes||"—"}</span>,
+                    <span style={{fontSize:12}}>{g.receivedBy}</span>,
+                  ]}/>
+                ))}
+              </Table>
+          }
+        </Card>
+      )}
+
+      {tab==="dispatch" && (
+        <Card pad={false}>
+          <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,fontSize:14,fontWeight:600}}>
+            Dispatch Notes ({dispatches.length})
+          </div>
+          {dispatches.length===0
+            ? <div style={{padding:40,textAlign:"center",color:C.textMid}}>No dispatches yet. Click "Dispatch Product" to get started.</div>
+            : <Table heads={["Dispatch ID","Date","SO Ref","Customer","Product","Qty","Carrier","Notes","By"]}>
+                {dispatches.map(d=>(
+                  <TR key={d.id} cells={[
+                    <span style={{fontFamily:"monospace",fontSize:11,color:C.primary,fontWeight:600}}>{d.id}</span>,
+                    <span style={{fontSize:11,color:C.textMid}}>{d.date} {d.time}</span>,
+                    <span style={{fontFamily:"monospace",fontSize:11}}>{d.soId||"—"}</span>,
+                    <span style={{fontWeight:500}}>{d.customer}</span>,
+                    <span style={{fontSize:12}}>{d.fgName}</span>,
+                    <span style={{fontWeight:700,color:C.primary}}>{d.qty}</span>,
+                    <span style={{fontSize:12}}>{d.carrier||"—"}</span>,
+                    <span style={{fontSize:11,color:C.textMid}}>{d.notes||"—"}</span>,
+                    <span style={{fontSize:12}}>{d.dispatchedBy}</span>,
+                  ]}/>
+                ))}
+              </Table>
+          }
+        </Card>
+      )}
+
+      {/* GRN Modal */}
+      {showGRN && (
+        <Modal title="📥 Goods Received Note" onClose={()=>setShowGRN(false)} width={540}>
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Linked Purchase Order (optional)</div>
+              <select value={grnForm.poId} onChange={e=>setGrnForm(p=>({...p,poId:e.target.value}))}
+                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}>
+                <option value="">— No PO linked —</option>
+                {purchaseOrders.filter(p=>!["Received","Cancelled"].includes(p.status)).map(po=>(
+                  <option key={po.id} value={po.id}>{po.id} · {rawMaterials.find(m=>m.id===po.materialId)?.internalRef||po.materialId}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Material Received *</div>
+              <div style={{position:"relative"}}>
+                <input value={grnSel?`${grnSel.internalRef} — ${grnSel.name}`:grnSearch}
+                  onChange={e=>{setGrnSearch(e.target.value);setGrnSel(null);setShowGrnDrop(true);}}
+                  onFocus={()=>setShowGrnDrop(true)} onBlur={()=>setTimeout(()=>setShowGrnDrop(false),150)}
+                  placeholder="Search material by ref or name..."
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+                <SearchDrop items={filteredGrn} show={showGrnDrop&&!!grnSearch} onSel={i=>{setGrnSel(i);setGrnSearch("");setShowGrnDrop(false);}}/>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:12}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Qty Received *</div>
+                <input type="number" min={1} value={grnForm.qtyReceived} onChange={e=>setGrnForm(p=>({...p,qtyReceived:e.target.value}))}
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Condition</div>
+                <select value={grnForm.condition} onChange={e=>setGrnForm(p=>({...p,condition:e.target.value}))}
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}>
+                  {["Good","Acceptable","Damaged","Rejected"].map(c=><option key={c}>{c}</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Notes / Remarks</div>
+              <input value={grnForm.notes} onChange={e=>setGrnForm(p=>({...p,notes:e.target.value}))} placeholder="Batch number, damage notes, etc."
+                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+            </div>
+            {grnSel&&grnForm.qtyReceived&&(
+              <div style={{background:"#f0fff4",border:"1px solid #c6f6d5",borderRadius:6,padding:"10px 14px",fontSize:13}}>
+                <div style={{fontWeight:600,color:C.success}}>✓ Receiving {grnForm.qtyReceived} × {grnSel.internalRef}</div>
+                <div style={{color:C.textMid,marginTop:2}}>Stock: {grnSel.stock||0} → {(grnSel.stock||0)+parseInt(grnForm.qtyReceived||0)}</div>
+              </div>
+            )}
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <Btn variant="secondary" onClick={()=>setShowGRN(false)}>Cancel</Btn>
+              <Btn onClick={handleGRN} disabled={!grnSel||!grnForm.qtyReceived}>Confirm GRN</Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Dispatch Modal */}
+      {showDispatch && (
+        <Modal title="🚚 Dispatch Product to Customer" onClose={()=>setShowDispatch(false)} width={540}>
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Linked Sales Order (optional)</div>
+              <select value={dispForm.soId} onChange={e=>{
+                const so=salesOrders.find(s=>s.id===e.target.value);
+                setDispForm(p=>({...p,soId:e.target.value,customer:so?.customer||p.customer,qty:so?.qty||p.qty}));
+                if(so){const fg=finishedGoods.find(f=>f.id===so.fgId);if(fg)setDispSel(fg);}
+              }} style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}>
+                <option value="">— No SO linked —</option>
+                {salesOrders.filter(o=>!["Delivered","Cancelled"].includes(o.status)).map(o=>(
+                  <option key={o.id} value={o.id}>{o.id} — {o.customer}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Customer *</div>
+              <input value={dispForm.customer} onChange={e=>setDispForm(p=>({...p,customer:e.target.value}))} placeholder="Customer name"
+                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Product (Finished Good) *</div>
+              <div style={{position:"relative"}}>
+                <input value={dispSel?`${dispSel.id} — ${dispSel.name}`:dispSearch}
+                  onChange={e=>{setDispSearch(e.target.value);setDispSel(null);setShowDispDrop(true);}}
+                  onFocus={()=>setShowDispDrop(true)} onBlur={()=>setTimeout(()=>setShowDispDrop(false),150)}
+                  placeholder="Search finished good..."
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+                <SearchDrop items={filteredDisp} show={showDispDrop&&!!dispSearch} onSel={i=>{setDispSel(i);setDispSearch("");setShowDispDrop(false);}}/>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:12}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Quantity *</div>
+                <input type="number" min={1} value={dispForm.qty} onChange={e=>setDispForm(p=>({...p,qty:e.target.value}))}
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Carrier / Method</div>
+                <input value={dispForm.carrier} onChange={e=>setDispForm(p=>({...p,carrier:e.target.value}))} placeholder="DHL, courier, hand delivery..."
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+              </div>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Notes</div>
+              <input value={dispForm.notes} onChange={e=>setDispForm(p=>({...p,notes:e.target.value}))} placeholder="Tracking number, special instructions..."
+                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+            </div>
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <Btn variant="secondary" onClick={()=>setShowDispatch(false)}>Cancel</Btn>
+              <Btn onClick={handleDispatch} disabled={!dispSel||!dispForm.qty||!dispForm.customer}>Confirm Dispatch</Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+};
+
 const NAV = [
-  { id:"dash",     label:"Dashboard",        icon:"⊞",  group:"Main" },
-  { id:"analysis", label:"Analysis",         icon:"📊", group:"Main" },
-  { id:"sales",    label:"Sales Orders",     icon:"📋", group:"Operations" },
-  { id:"mfg",      label:"Manufacturing",    icon:"⚙️", group:"Operations" },
-  { id:"prod",     label:"Production",       icon:"🏭", group:"Operations" },
-  { id:"inv",      label:"Inventory",        icon:"📦", group:"Operations" },
-  { id:"proc",     label:"Procurement",      icon:"🛒", group:"Operations" },
-  { id:"editor",   label:"Products & BOMs",  icon:"✏️", group:"Configuration" },
+  { id:"dash",      label:"Dashboard",       icon:"⊞",  group:"Main" },
+  { id:"analysis",  label:"Analysis",        icon:"📊", group:"Main" },
+  { id:"sales",     label:"Sales Orders",    icon:"📋", group:"Operations" },
+  { id:"mfg",       label:"Manufacturing",   icon:"⚙️", group:"Operations" },
+  { id:"prod",      label:"Production",      icon:"🏭", group:"Operations" },
+  { id:"inv",       label:"Inventory",       icon:"📦", group:"Operations" },
+  { id:"proc",      label:"Procurement",     icon:"🛒", group:"Operations" },
+  { id:"transfers", label:"Stock Transfers", icon:"🔄", group:"Warehouse" },
+  { id:"warehouse", label:"Warehouse (GRN)", icon:"🏬", group:"Warehouse" },
+  { id:"editor",    label:"Products & BOMs", icon:"✏️", group:"Configuration" },
 ];
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -3698,7 +4259,11 @@ export default function App() {
   const critAlerts = S.rawMaterials.filter(m=>m.stock<=m.minStock).length +
     S.salesOrders.filter(o=>o.priority==="HIGH"&&!["Delivered","Cancelled"].includes(o.status)).length;
 
-  const groups = [...new Set(NAV.map(n=>n.group))];
+  const allowedNav = NAV.filter(n=>currentUser.access.includes(n.id));
+  const groups = [...new Set(allowedNav.map(n=>n.group))];
+
+  // If current active tab is not in user's access, switch to first allowed
+  const safeActive = currentUser.access.includes(active) ? active : currentUser.access[0];
 
   return (
     <>
@@ -3742,8 +4307,8 @@ export default function App() {
                     {group}
                   </div>
                 )}
-                {NAV.filter(n=>n.group===group).map(item => {
-                  const on = active===item.id;
+                {allowedNav.filter(n=>n.group===group).map(item => {
+                  const on = safeActive===item.id;
                   const badge = (item.id==="inv"||item.id==="dash") && critAlerts>0 ? critAlerts : 0;
                   return (
                     <button key={item.id} onClick={()=>setActive(item.id)} title={item.label}
@@ -3808,7 +4373,7 @@ export default function App() {
             </button>
             <div style={{ flex:1 }}>
               <span style={{ fontSize:13, fontWeight:600, color:C.text }}>
-                {NAV.find(n=>n.id===active)?.label}
+                {NAV.find(n=>n.id===safeActive)?.label}
               </span>
             </div>
             {critAlerts>0 && (
@@ -3839,14 +4404,16 @@ export default function App() {
 
           {/* Main content */}
           <div style={{ flex:1, overflowY:"auto", padding:24 }}>
-            {active==="dash"     && <Dashboard     S={S} />}
-            {active==="analysis" && <Analysis      S={S} />}
-            {active==="mfg"      && <Manufacturing S={S} />}
-            {active==="inv"      && <Inventory     S={S} dispatch={dispatch} />}
-            {active==="sales"    && <SalesOrders   S={S} dispatch={dispatch} />}
-            {active==="prod"     && <Production    S={S} dispatch={dispatch} />}
-            {active==="proc"     && <Procurement   S={S} dispatch={dispatch} />}
-            {active==="editor"   && <ProductEditor S={S} dispatch={dispatch} />}
+            {safeActive==="dash"      && <Dashboard     S={S} />}
+            {safeActive==="analysis"  && <Analysis      S={S} />}
+            {safeActive==="mfg"       && <Manufacturing S={S} />}
+            {safeActive==="inv"       && <Inventory     S={S} dispatch={dispatch} />}
+            {safeActive==="sales"     && <SalesOrders   S={S} dispatch={dispatch} />}
+            {safeActive==="prod"      && <Production    S={S} dispatch={dispatch} />}
+            {safeActive==="proc"      && <Procurement   S={S} dispatch={dispatch} />}
+            {safeActive==="transfers" && <StockTransfers S={S} dispatch={dispatch} currentUser={currentUser} />}
+            {safeActive==="warehouse" && <Warehouse      S={S} dispatch={dispatch} currentUser={currentUser} />}
+            {safeActive==="editor"    && <ProductEditor  S={S} dispatch={dispatch} />}
           </div>
         </div>
       </div>
