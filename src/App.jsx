@@ -2482,7 +2482,7 @@ const ProductForm = ({ initial, onSave, onClose, categories }) => {
         </div>
       </Modal>
     );
-  };
+};
 
 // ════════════════════════════════════════════════════════════════════════════
 // BOM EDITOR MODAL (defined outside to prevent re-mount on parent re-render)
@@ -2601,8 +2601,6 @@ const BomEditorModal = ({ fg, onClose, bom, rawMaterials, dispatch }) => {
         </div>
       </Modal>
     );
-  };
-
 };
 
 // ════════════════════════════════════════════════════════════════════════════
