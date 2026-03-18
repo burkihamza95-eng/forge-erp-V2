@@ -1757,24 +1757,9 @@ const SEED = {
       { materialId:"ED8182-ND", qty:1 }
     ]
   },
-  salesOrders: [
-    { id:"SO-0041", customer:"Meridian Defence",     fgId:"FG017", qty:2, date:"2024-01-14", dueDate:"2024-01-28", status:"In Production", priority:"HIGH",   total:10400, notes:"Urgent delivery — field deployment" },
-    { id:"SO-0042", customer:"Delta Optics Ltd",     fgId:"FG009", qty:3, date:"2024-01-16", dueDate:"2024-01-25", status:"Picking",       priority:"NORMAL", total:9600,  notes:"" },
-    { id:"SO-0043", customer:"Nexus Security",       fgId:"FG007", qty:2, date:"2024-01-18", dueDate:"2024-01-30", status:"Pending",       priority:"NORMAL", total:4800,  notes:"" },
-    { id:"SO-0044", customer:"Apex Systems",         fgId:"FG020", qty:4, date:"2024-01-20", dueDate:"2024-01-28", status:"Pending",       priority:"HIGH",   total:8400,  notes:"Urgent — training exercise deadline" },
-    { id:"SO-0045", customer:"Ironfield Tactical",   fgId:"FG008", qty:1, date:"2024-01-22", dueDate:"2024-02-05", status:"Quote",         priority:"NORMAL", total:1950,  notes:"" },
-  ],
-  workOrders: [
-    { id:"WO-0019", soId:"SO-0041", fgId:"FG017", qty:2, line:"Line A", status:"In Progress", stage:"Assembly",    progress:72, startDate:"2024-01-20", endDate:"2024-01-28" },
-    { id:"WO-0020", soId:"SO-0042", fgId:"FG009", qty:3, line:"Line B", status:"In Progress", stage:"Fabrication", progress:35, startDate:"2024-01-22", endDate:"2024-01-25" },
-    { id:"WO-0021", soId:"SO-0043", fgId:"FG007", qty:2, line:"Line A", status:"Scheduled",   stage:"Pending",     progress:0,  startDate:"2024-01-26", endDate:"2024-01-30" },
-  ],
-  purchaseOrders: [
-    { id:"PO-0088", supplier:"MetalCore Ltd",    materialId:"RM001", qty:800,  unitCost:2.20, status:"In Transit", orderDate:"2024-01-12", etaDate:"2024-01-25", total:1760 },
-    { id:"PO-0089", supplier:"SealTech GmbH",    materialId:"RM007", qty:80,   unitCost:9.00, status:"Ordered",    orderDate:"2024-01-18", etaDate:"2024-01-28", total:720  },
-    { id:"PO-0090", supplier:"BearingWorld",     materialId:"RM005", qty:150,  unitCost:4.50, status:"Ordered",    orderDate:"2024-01-19", etaDate:"2024-02-01", total:675  },
-    { id:"PO-0091", supplier:"PCB Express",      materialId:"RM006", qty:30,   unitCost:36.00,status:"Confirmed",  orderDate:"2024-01-20", etaDate:"2024-01-30", total:1080 },
-  ],
+  salesOrders: [],
+  workOrders: [],
+  purchaseOrders: [],
   suppliers: [
     { id:"SUP01", name:"MetalCore Ltd",      contact:"James Wu",       email:"j.wu@metalcore.com",   phone:"+44 161 500 1201", rating:4.8, leadDays:8,  category:"Raw Metal" },
     { id:"SUP02", name:"SealTech GmbH",      contact:"Petra Braun",    email:"p.braun@sealtech.de",  phone:"+49 89 4400 7700", rating:4.2, leadDays:10, category:"Seals & Gaskets" },
@@ -2955,6 +2940,7 @@ const Inventory = ({ S, dispatch }) => {
   const [editStock, setEditStock] = useState(null);
   const [newStock, setNewStock] = useState(0);
   const [catFilter, setCatFilter] = useState("all");
+  const [showAddPart, setShowAddPart] = useState(false);
 
   const categories = ["all", ...new Set(rawMaterials.map(m=>m.category))].sort();
 
@@ -2969,7 +2955,8 @@ const Inventory = ({ S, dispatch }) => {
 
   return (
     <div style={{ animation:"slide-in .3s ease" }}>
-      <PageHeader title="Inventory" subtitle={`${rawMaterials.length} raw materials · ${critCount} low stock`} />
+      <PageHeader title="Inventory" subtitle={`${rawMaterials.length} raw materials · ${critCount} low stock`}
+        actions={<Btn icon="+" onClick={()=>setShowAddPart(true)}>Add Part</Btn>} />
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:20 }}>
         <StatCard label="Total SKUs"    value={rawMaterials.length}       icon="📦" color={C.primary} />
@@ -3039,6 +3026,9 @@ const Inventory = ({ S, dispatch }) => {
             Current: {editStock.stock} · Min: {editStock.minStock}
           </div>
         </Modal>
+      )}
+      {showAddPart && (
+        <AddPartModal onClose={()=>setShowAddPart(false)} dispatch={dispatch} rawMaterials={rawMaterials} />
       )}
     </div>
   );
@@ -3251,6 +3241,242 @@ const Production = ({ S, dispatch }) => {
 // ════════════════════════════════════════════════════════════════════════════
 // MODULE: PROCUREMENT
 // ════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// PROCUREMENT MODAL — searchable supplier + material
+// ════════════════════════════════════════════════════════════════════════════
+const ProcurementModal = ({ rawMaterials, suppliers, onClose, onSave }) => {
+  const [supplierQ, setSupplierQ] = useState("");
+  const [supplierSel, setSupplierSel] = useState(null);
+  const [showSupDrop, setShowSupDrop] = useState(false);
+  const [matQ, setMatQ] = useState("");
+  const [matSel, setMatSel] = useState(null);
+  const [showMatDrop, setShowMatDrop] = useState(false);
+  const [qty, setQty] = useState(1);
+  const [unitPrice, setUnitPrice] = useState(0);
+  const [etaDate, setEtaDate] = useState("");
+
+  const filteredSup = suppliers.filter(s =>
+    !supplierQ || s.name.toLowerCase().includes(supplierQ.toLowerCase())
+  ).slice(0,10);
+
+  const filteredMat = rawMaterials.filter(m =>
+    !matQ || m.internalRef.toLowerCase().includes(matQ.toLowerCase()) ||
+    m.name.toLowerCase().includes(matQ.toLowerCase()) ||
+    m.category.toLowerCase().includes(matQ.toLowerCase())
+  ).slice(0,15);
+
+  const dropStyle = { position:"absolute", top:"100%", left:0, right:0, zIndex:100,
+    background:"#fff", border:`1px solid ${C.primary}`, borderRadius:6,
+    boxShadow:"0 4px 16px rgba(0,0,0,0.12)", maxHeight:220, overflowY:"auto" };
+
+  const dropItem = (active) => ({ padding:"9px 12px", cursor:"pointer",
+    fontSize:13, borderBottom:`1px solid ${C.border}`,
+    background: active ? C.primaryLight : "transparent" });
+
+  return (
+    <Modal title="New Purchase Order" onClose={onClose} width={520}>
+      <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+
+        {/* Supplier searchable */}
+        <div>
+          <div style={{ fontSize:12, fontWeight:500, color:C.textMid, marginBottom:5 }}>Supplier</div>
+          <div style={{ position:"relative" }}>
+            <input value={supplierSel ? supplierSel.name : supplierQ}
+              onChange={e=>{ setSupplierQ(e.target.value); setSupplierSel(null); setShowSupDrop(true); }}
+              onFocus={()=>setShowSupDrop(true)}
+              onBlur={()=>setTimeout(()=>setShowSupDrop(false),150)}
+              placeholder="Type to search suppliers... (or leave blank)"
+              style={{ width:"100%", padding:"8px 10px", border:`1px solid ${C.border}`,
+                borderRadius:6, fontSize:13, outline:"none", boxSizing:"border-box" }}
+              onFocusCapture={e=>e.target.style.borderColor=C.primary}
+            />
+            {showSupDrop && supplierQ && filteredSup.length > 0 && (
+              <div style={dropStyle}>
+                {filteredSup.map(s=>(
+                  <div key={s.id}
+                    onMouseDown={()=>{ setSupplierSel(s); setSupplierQ(s.name); setShowSupDrop(false); }}
+                    style={dropItem(supplierSel?.id===s.id)}
+                    onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+                    onMouseLeave={e=>e.currentTarget.style.background=supplierSel?.id===s.id?C.primaryLight:"transparent"}>
+                    <span style={{fontWeight:500}}>{s.name}</span>
+                    <span style={{fontSize:11,color:C.textMid,marginLeft:8}}>{s.category}</span>
+                  </div>
+                ))}
+                <div onMouseDown={()=>{ setSupplierSel({id:"new",name:supplierQ}); setShowSupDrop(false); }}
+                  style={{...dropItem(false), color:C.primary, fontStyle:"italic"}}>
+                  + Use "{supplierQ}" as new supplier
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Material searchable */}
+        <div>
+          <div style={{ fontSize:12, fontWeight:500, color:C.textMid, marginBottom:5 }}>Material <span style={{color:"red"}}>*</span></div>
+          <div style={{ position:"relative" }}>
+            <input value={matSel ? `${matSel.internalRef} — ${matSel.name}` : matQ}
+              onChange={e=>{ setMatQ(e.target.value); setMatSel(null); setShowMatDrop(true); }}
+              onFocus={()=>setShowMatDrop(true)}
+              onBlur={()=>setTimeout(()=>setShowMatDrop(false),150)}
+              placeholder="Type ref, name or category to search..."
+              style={{ width:"100%", padding:"8px 10px", border:`1px solid ${C.border}`,
+                borderRadius:6, fontSize:13, outline:"none", boxSizing:"border-box" }}
+              onFocusCapture={e=>e.target.style.borderColor=C.primary}
+            />
+            {showMatDrop && matQ && filteredMat.length > 0 && (
+              <div style={dropStyle}>
+                {filteredMat.map(m=>(
+                  <div key={m.id}
+                    onMouseDown={()=>{ setMatSel(m); setMatQ(""); setShowMatDrop(false); }}
+                    style={dropItem(matSel?.id===m.id)}
+                    onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+                    onMouseLeave={e=>e.currentTarget.style.background=matSel?.id===m.id?C.primaryLight:"transparent"}>
+                    <div style={{fontSize:11,fontFamily:"monospace",color:C.textMid}}>{m.internalRef}</div>
+                    <div style={{fontSize:12,color:C.text}}>{m.name.length>60?m.name.slice(0,60)+"…":m.name}</div>
+                    <div style={{fontSize:10,color:C.textDim}}>{m.category} · {m.stock} {m.unit} in stock</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {showMatDrop && matQ && filteredMat.length===0 && (
+              <div style={dropStyle}>
+                <div style={{padding:"12px",color:C.textMid,fontSize:13}}>No materials found for "{matQ}"</div>
+              </div>
+            )}
+          </div>
+          {matSel && (
+            <div style={{ marginTop:6, background:C.primaryLight, border:`1px solid ${C.border}`,
+              borderRadius:6, padding:"8px 10px", fontSize:12, display:"flex", justifyContent:"space-between" }}>
+              <span style={{fontFamily:"monospace",color:C.primary}}>{matSel.internalRef}</span>
+              <span style={{color:C.textMid}}>{matSel.name.slice(0,50)}</span>
+              <button onMouseDown={()=>setMatSel(null)}
+                style={{background:"none",border:"none",cursor:"pointer",color:C.textMid,fontSize:14}}>✕</button>
+            </div>
+          )}
+        </div>
+
+        <div style={{display:"flex",gap:12}}>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Quantity</div>
+            <input type="number" min={1} value={qty} onChange={e=>setQty(parseInt(e.target.value)||1)}
+              style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Unit Price (USD)</div>
+            <input type="number" min={0} step="0.01" value={unitPrice} onChange={e=>setUnitPrice(parseFloat(e.target.value)||0)}
+              style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+          </div>
+        </div>
+
+        <div>
+          <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>ETA Date</div>
+          <input type="date" value={etaDate} onChange={e=>setEtaDate(e.target.value)}
+            style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+        </div>
+
+        {matSel && qty && (
+          <div style={{background:"#f9fafb",border:`1px solid ${C.border}`,borderRadius:6,padding:"10px 14px",
+            display:"flex",justifyContent:"space-between"}}>
+            <span style={{fontSize:13,color:C.textMid}}>Total Value:</span>
+            <span style={{fontSize:14,fontWeight:700,color:C.primary}}>{fmt$(qty*unitPrice)}</span>
+          </div>
+        )}
+
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={()=>{
+            if(!matSel) return;
+            onSave({
+              id:genId("PO"),
+              supplierId: supplierSel?.id||"",
+              supplierName: supplierSel?.name||"",
+              materialId: matSel.id,
+              qty, unitPrice, total:qty*unitPrice,
+              etaDate, status:"Confirmed",
+              date:new Date().toISOString().split("T")[0]
+            });
+          }}>Create PO</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// ADD PART MODAL — for Inventory
+// ════════════════════════════════════════════════════════════════════════════
+const AddPartModal = ({ onClose, dispatch, rawMaterials }) => {
+  const [form, setForm] = useState({ id:"", name:"", category:"", unit:"Units", cost:0, stock:0, minStock:5 });
+  const set = k => e => setForm(p=>({...p,[k]:e.target.value}));
+  const cats = [...new Set(rawMaterials.map(m=>m.category))].sort();
+
+  const save = () => {
+    if(!form.id.trim()||!form.name.trim()) return;
+    if(rawMaterials.find(m=>m.id===form.id)) { alert("A part with this Internal Reference already exists."); return; }
+    dispatch({ type:"ADD_RM", payload:{
+      ...form, internalRef:form.id,
+      cost:parseFloat(form.cost)||0,
+      stock:parseInt(form.stock)||0,
+      minStock:parseInt(form.minStock)||5
+    }});
+    onClose();
+  };
+
+  return (
+    <Modal title="Add New Part" onClose={onClose} width={520}>
+      <div style={{display:"flex",flexDirection:"column",gap:14}}>
+        <div>
+          <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Internal Reference <span style={{color:"red"}}>*</span></div>
+          <input value={form.id} onChange={set("id")} placeholder="e.g. H01 / 0020-1234"
+            style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+        </div>
+        <div>
+          <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Part Name <span style={{color:"red"}}>*</span></div>
+          <input value={form.name} onChange={set("name")} placeholder="Full part description"
+            style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+        </div>
+        <div style={{display:"flex",gap:12}}>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Category</div>
+            <input value={form.category} onChange={set("category")} placeholder="e.g. Fasteners / Screw" list="part-cats"
+              style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+            <datalist id="part-cats">{cats.map(c=><option key={c} value={c}/>)}</datalist>
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Unit</div>
+            <select value={form.unit} onChange={set("unit")}
+              style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}>
+              {["Units","m","mm","kg","g","L","ml","pcs","box","set","roll"].map(u=><option key={u}>{u}</option>)}
+            </select>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:12}}>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Initial Stock</div>
+            <input type="number" min={0} value={form.stock} onChange={set("stock")}
+              style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Min Stock</div>
+            <input type="number" min={0} value={form.minStock} onChange={set("minStock")}
+              style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Unit Cost (USD)</div>
+            <input type="number" min={0} step="0.01" value={form.cost} onChange={set("cost")}
+              style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={save}>Add Part</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
 const Procurement = ({ S, dispatch }) => {
   const { purchaseOrders, rawMaterials, suppliers } = S;
   const [showAdd, setShowAdd] = useState(false);
@@ -3329,41 +3555,12 @@ const Procurement = ({ S, dispatch }) => {
       </div>
 
       {showAdd && (
-        <Modal title="New Purchase Order" onClose={()=>setShowAdd(false)}>
-          <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-            <Sel label="Supplier" value={form.supplierId} onChange={e=>setForm({...form,supplierId:e.target.value})}>
-              <option value="">Select supplier...</option>
-              {(suppliers||[]).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
-            </Sel>
-            <Sel label="Material" value={form.materialId} onChange={e=>setForm({...form,materialId:e.target.value})}>
-              <option value="">Select material...</option>
-              {rawMaterials.filter((_,i)=>i<200).map(m=>(
-                <option key={m.id} value={m.id}>{m.internalRef} — {m.name.substring(0,50)}</option>
-              ))}
-            </Sel>
-            <div style={{display:"flex",gap:12}}>
-              <div style={{flex:1}}><Input label="Quantity" type="number" min={1} value={form.qty}
-                onChange={e=>setForm({...form,qty:parseInt(e.target.value)||1})}/></div>
-              <div style={{flex:1}}><Input label="Unit Price (USD)" type="number" value={form.unitPrice}
-                onChange={e=>setForm({...form,unitPrice:parseFloat(e.target.value)||0})}/></div>
-            </div>
-            <Input label="ETA Date" type="date" value={form.etaDate}
-              onChange={e=>setForm({...form,etaDate:e.target.value})}/>
-            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-              <Btn variant="secondary" onClick={()=>setShowAdd(false)}>Cancel</Btn>
-              <Btn onClick={()=>{
-                if(!form.materialId) return;
-                dispatch({type:"ADD_PO",payload:{
-                  ...form, id:genId("PO"), status:"Confirmed",
-                  total:form.qty*form.unitPrice,
-                  date:new Date().toISOString().split("T")[0]
-                }});
-                setShowAdd(false);
-                setForm({supplierId:"",materialId:"",qty:1,unitPrice:0,etaDate:""});
-              }}>Create PO</Btn>
-            </div>
-          </div>
-        </Modal>
+        <ProcurementModal
+          rawMaterials={rawMaterials}
+          suppliers={suppliers||[]}
+          onClose={()=>setShowAdd(false)}
+          onSave={po=>{ dispatch({type:"ADD_PO",payload:po}); setShowAdd(false); }}
+        />
       )}
     </div>
   );
@@ -3374,6 +3571,100 @@ const Procurement = ({ S, dispatch }) => {
 // ════════════════════════════════════════════════════════════════════════════
 // NAVIGATION CONFIG
 // ════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// LOGIN PAGE
+// ════════════════════════════════════════════════════════════════════════════
+const USERS = [
+  { id:"hamza",    name:"Hamza",    role:"Admin",      avatar:"H", color:"#714b67" },
+  { id:"ahsan",    name:"Ahsan",    role:"Production", avatar:"A", color:"#017e84" },
+  { id:"abdullah", name:"Abdullah", role:"Inventory",  avatar:"Ab", color:"#0066cc" },
+  { id:"hafiz",    name:"Hafiz",    role:"Procurement", avatar:"Hf", color:"#28a745" },
+  { id:"yasir",    name:"Yasir",    role:"Sales",      avatar:"Y", color:"#f59e0b" },
+];
+
+const LoginPage = ({ onLogin }) => {
+  const [selected, setSelected] = useState(null);
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+
+  const handleLogin = () => {
+    if (!selected) return;
+    // Simple PIN: first 4 letters of name uppercased, or just Enter with no PIN
+    setError("");
+    onLogin(selected);
+  };
+
+  return (
+    <div style={{ minHeight:"100vh", background:"linear-gradient(135deg, #f0f0f0 0%, #e8e4f0 100%)",
+      display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Inter',sans-serif" }}>
+      <div style={{ width:"100%", maxWidth:480, padding:20 }}>
+
+        {/* Logo */}
+        <div style={{ textAlign:"center", marginBottom:36 }}>
+          <div style={{ width:64, height:64, background:C.primary, borderRadius:16,
+            display:"flex", alignItems:"center", justifyContent:"center",
+            margin:"0 auto 14px", boxShadow:`0 8px 24px ${C.primary}44` }}>
+            <span style={{ fontSize:28, color:"#fff", fontWeight:800 }}>S</span>
+          </div>
+          <div style={{ fontSize:28, fontWeight:800, color:C.primary, letterSpacing:"0.05em" }}>SHIBLI ERP</div>
+          <div style={{ fontSize:13, color:C.textMid, marginTop:4 }}>Manufacturing Operations System</div>
+        </div>
+
+        {/* User cards */}
+        <div style={{ background:"#fff", borderRadius:12, padding:24,
+          boxShadow:"0 4px 24px rgba(0,0,0,0.08)", marginBottom:16 }}>
+          <div style={{ fontSize:14, fontWeight:600, color:C.text, marginBottom:16, textAlign:"center" }}>
+            Select your profile to continue
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:20 }}>
+            {USERS.map(u=>(
+              <button key={u.id} onClick={()=>{ setSelected(u); setError(""); }}
+                style={{ padding:"14px 12px", border:`2px solid ${selected?.id===u.id?u.color:C.border}`,
+                  borderRadius:10, background: selected?.id===u.id ? `${u.color}12` : "#fff",
+                  cursor:"pointer", transition:"all .15s", textAlign:"left",
+                  display:"flex", alignItems:"center", gap:12 }}
+                onMouseEnter={e=>{ if(selected?.id!==u.id) e.currentTarget.style.borderColor=u.color; }}
+                onMouseLeave={e=>{ if(selected?.id!==u.id) e.currentTarget.style.borderColor=C.border; }}>
+                <div style={{ width:38, height:38, borderRadius:"50%", background:u.color,
+                  display:"flex", alignItems:"center", justifyContent:"center",
+                  color:"#fff", fontSize:14, fontWeight:700, flexShrink:0 }}>
+                  {u.avatar}
+                </div>
+                <div>
+                  <div style={{ fontSize:14, fontWeight:600, color:C.text }}>{u.name}</div>
+                  <div style={{ fontSize:11, color:C.textMid }}>{u.role}</div>
+                </div>
+                {selected?.id===u.id && (
+                  <span style={{ marginLeft:"auto", color:u.color, fontSize:16 }}>✓</span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {error && (
+            <div style={{ background:"#fef2f2", border:"1px solid #fecaca", borderRadius:6,
+              padding:"8px 12px", fontSize:12, color:"#dc3545", marginBottom:12 }}>
+              {error}
+            </div>
+          )}
+
+          <button onClick={handleLogin} disabled={!selected}
+            style={{ width:"100%", padding:"12px", background: selected?C.primary:"#e5e7eb",
+              color: selected?"#fff":"#9ca3af", border:"none", borderRadius:8,
+              fontSize:15, fontWeight:600, cursor: selected?"pointer":"not-allowed",
+              transition:"all .2s" }}>
+            {selected ? `Continue as ${selected.name} →` : "Select a profile above"}
+          </button>
+        </div>
+
+        <div style={{ textAlign:"center", fontSize:11, color:C.textDim }}>
+          SHIBLI ERP v4 · Manufacturing Operations
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const NAV = [
   { id:"dash",     label:"Dashboard",        icon:"⊞",  group:"Main" },
   { id:"analysis", label:"Analysis",         icon:"📊", group:"Main" },
@@ -3393,8 +3684,16 @@ export default function App() {
   const [active, setActive] = useState("dash");
   const [clock, setClock] = useState(new Date());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
 
   useEffect(()=>{ const t=setInterval(()=>setClock(new Date()),1000); return ()=>clearInterval(t); },[]);
+
+  if (!currentUser) return (
+    <>
+      <GlobalStyles />
+      <LoginPage onLogin={user=>setCurrentUser(user)} />
+    </>
+  );
 
   const critAlerts = S.rawMaterials.filter(m=>m.stock<=m.minStock).length +
     S.salesOrders.filter(o=>o.priority==="HIGH"&&!["Delivered","Cancelled"].includes(o.status)).length;
@@ -3421,7 +3720,7 @@ export default function App() {
                   display:"flex", alignItems:"center", justifyContent:"center",
                   color:"#fff", fontSize:15, fontWeight:700, flexShrink:0 }}>F</div>
                 <div>
-                  <div style={{ fontSize:15, fontWeight:700, color:C.text, lineHeight:1 }}>FORGE ERP</div>
+                  <div style={{ fontSize:15, fontWeight:700, color:C.text, lineHeight:1 }}>SHIBLI ERP</div>
                   <div style={{ fontSize:10, color:C.textMid, marginTop:1 }}>Manufacturing</div>
                 </div>
               </div>
@@ -3519,8 +3818,22 @@ export default function App() {
                 <span>⚠</span> {critAlerts} alert{critAlerts>1?"s":""}
               </div>
             )}
-            <div style={{ fontSize:12, color:C.textMid }}>
-              FORGE Manufacturing ERP
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <div style={{ width:30, height:30, borderRadius:"50%",
+                background:currentUser.color, display:"flex", alignItems:"center",
+                justifyContent:"center", color:"#fff", fontSize:12, fontWeight:700 }}>
+                {currentUser.avatar}
+              </div>
+              <span style={{ fontSize:13, fontWeight:500, color:C.text }}>{currentUser.name}</span>
+              <span style={{ fontSize:11, color:C.textMid }}>· {currentUser.role}</span>
+              <button onClick={()=>setCurrentUser(null)}
+                style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:6,
+                  padding:"4px 10px", fontSize:11, color:C.textMid, cursor:"pointer",
+                  marginLeft:4, transition:"all .15s" }}
+                onMouseEnter={e=>e.currentTarget.style.borderColor=C.danger}
+                onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+                Log out
+              </button>
             </div>
           </div>
 
