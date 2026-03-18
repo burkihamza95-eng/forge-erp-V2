@@ -2728,10 +2728,11 @@ const ProductEditor = ({ S, dispatch }) => {
                   <span style={{ fontSize:12, color: bomLines.length>0?C.success:C.warning, fontWeight:500 }}>
                     {bomLines.length>0 ? `${bomLines.length} parts` : "No BOM"}
                   </span>,
-                  <div style={{display:"flex",gap:6}}>
-                    <Btn size="sm" variant="secondary" onClick={()=>setEditProduct(fg)}>Edit</Btn>
-                    <Btn size="sm" variant="secondary" onClick={()=>setEditBomFg(fg)}>BOM</Btn>
-                    <Btn size="sm" variant="danger" onClick={()=>{
+                  <div style={{display:"flex",gap:6}} onClick={e=>e.stopPropagation()}>
+                    <Btn size="sm" variant="secondary" onClick={e=>{e.stopPropagation();setEditProduct(fg);}}>Edit</Btn>
+                    <Btn size="sm" variant="secondary" onClick={e=>{e.stopPropagation();setEditBomFg(fg);}}>BOM</Btn>
+                    <Btn size="sm" variant="danger" onClick={e=>{
+                      e.stopPropagation();
                       if(window.confirm(`Delete ${fg.name}?`))
                         dispatch({type:"DELETE_PRODUCT",payload:{id:fg.id}});
                     }}>Del</Btn>
@@ -2772,7 +2773,7 @@ const ProductEditor = ({ S, dispatch }) => {
                     </div>
                     <Progress value={pct} color={pct===100?C.success:pct>50?C.warning:C.danger}/>
                   </div>,
-                  <Btn size="sm" variant="secondary" icon="✏️" onClick={()=>setEditBomFg(fg)}>Edit BOM</Btn>
+                  <Btn size="sm" variant="secondary" icon="✏️" onClick={e=>{e.stopPropagation();setEditBomFg(fg);}}>Edit BOM</Btn>
                 ]}/>
               );
             })}
