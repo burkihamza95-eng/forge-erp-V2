@@ -1806,6 +1806,21 @@ function appReducer(state, { type, payload }) {
     case "DELETE_VENDOR": return { ...state, vendors: (state.vendors||[]).filter(v=>v.id!==payload) };
     case "ADD_CUSTOMER_LEDGER": return { ...state, customerLedger: [payload, ...(state.customerLedger||[])] };
     case "ADD_EXPENSE":   return { ...state, expenses: [payload, ...(state.expenses||[])] };
+    case "ADD_MO":        return { ...state, manufacturingOrders: [payload, ...(state.manufacturingOrders||[])] };
+    case "UPDATE_MO":     return { ...state, manufacturingOrders: (state.manufacturingOrders||[]).map(m=>m.id===payload.id?{...m,...payload}:m) };
+    case "EXECUTE_MO": {
+      // Consume raw materials and add finished goods stock
+      let newMats = state.rawMaterials.map(m=>{
+        const consumed = (payload.bomLines||[]).find(l=>l.materialId===m.id);
+        if (!consumed) return m;
+        return { ...m, stock: Math.max(0,(m.stock||0)-consumed.qty*payload.qty) };
+      });
+      return {
+        ...state,
+        rawMaterials: newMats,
+        manufacturingOrders: (state.manufacturingOrders||[]).map(m=>m.id===payload.id?{...m,status:"Done",completedDate:payload.completedDate}:m),
+      };
+    }
     default: return state;
   }
 }
@@ -3972,11 +3987,11 @@ const Procurement = ({ S, dispatch }) => {
 // ════════════════════════════════════════════════════════════════════════════
 const USERS = [
   { id:"hamza",    name:"Hamza",    role:"Admin",       avatar:"H",  color:"#714b67", password:"Hamza@123",
-    access:["dash","analysis","sales","mfg","prod","inv","proc","vendors","editor","warehouse","transfers","locations","accounting"] },
+    access:["dash","analysis","sales","mfg","mo","prod","inv","proc","vendors","editor","warehouse","transfers","locations","accounting"] },
   { id:"abdullah", name:"Abdullah", role:"Admin",       avatar:"Ab", color:"#0066cc", password:"Abdullah@123",
-    access:["dash","analysis","sales","mfg","prod","inv","proc","vendors","editor","warehouse","transfers","locations","accounting"] },
+    access:["dash","analysis","sales","mfg","mo","prod","inv","proc","vendors","editor","warehouse","transfers","locations","accounting"] },
   { id:"ahsan",    name:"Ahsan",    role:"Operations",  avatar:"A",  color:"#017e84", password:"Ahsan@123",
-    access:["sales","inv","proc","vendors"] },
+    access:["sales","inv","proc","vendors","mo","prod"] },
   { id:"hafiz",    name:"Hafiz",    role:"Inventory",   avatar:"Hf", color:"#28a745", password:"Hafiz@123",
     access:["inv","sales","locations","warehouse","transfers"] },
   { id:"yasir",    name:"Yasir",    role:"Sales",       avatar:"Y",  color:"#f59e0b", password:"Yasir@123",
@@ -4200,68 +4215,12 @@ const StockTransfers = ({ S, dispatch, currentUser }) => {
       </Card>
 
       {showNew && (
-        <Modal title="New Stock Transfer" onClose={()=>setShowNew(false)} width={520}>
-          <div style={{display:"flex",flexDirection:"column",gap:16}}>
-            <div style={{display:"flex",gap:12,alignItems:"flex-end"}}>
-              <div style={{flex:1}}>
-                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>From Location</div>
-                <select value={form.fromLoc} onChange={e=>setForm(p=>({...p,fromLoc:e.target.value}))}
-                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}>
-                  {LOCATIONS.map(l=><option key={l.id} value={l.id}>{l.icon} {l.name}</option>)}
-                </select>
-              </div>
-              <div style={{fontSize:22,color:C.textMid,paddingBottom:4}}>→</div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>To Location</div>
-                <select value={form.toLoc} onChange={e=>setForm(p=>({...p,toLoc:e.target.value}))}
-                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}>
-                  {LOCATIONS.filter(l=>l.id!==form.fromLoc).map(l=><option key={l.id} value={l.id}>{l.icon} {l.name}</option>)}
-                </select>
-              </div>
-            </div>
-            <div>
-              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Item *</div>
-              <div style={{position:"relative"}}>
-                <input value={selItem?selItem.label:itemSearch}
-                  onChange={e=>{setItemSearch(e.target.value);setSelItem(null);setShowItemDrop(true);}}
-                  onFocus={()=>setShowItemDrop(true)} onBlur={()=>setTimeout(()=>setShowItemDrop(false),150)}
-                  placeholder="Type to search materials or finished goods..."
-                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
-                {showItemDrop&&itemSearch&&(
-                  <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:100,background:"#fff",
-                    border:`1px solid ${C.primary}`,borderRadius:6,boxShadow:"0 4px 16px rgba(0,0,0,.12)",maxHeight:200,overflowY:"auto"}}>
-                    {filteredItems.length===0
-                      ? <div style={{padding:12,color:C.textMid,fontSize:12}}>No items found</div>
-                      : filteredItems.map((i,idx)=>(
-                        <div key={idx} onMouseDown={()=>{setSelItem(i);setItemSearch("");setShowItemDrop(false);}}
-                          style={{padding:"8px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,fontSize:12}}
-                          onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
-                          onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                          <div style={{fontFamily:"monospace",fontSize:10,color:C.textMid}}>{i.internalRef||i.id}</div>
-                          <div>{i.name.slice(0,60)}</div>
-                        </div>
-                      ))
-                    }
-                  </div>
-                )}
-              </div>
-            </div>
-            <div>
-              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Quantity *</div>
-              <input type="number" min={1} value={form.qty} onChange={e=>setForm(p=>({...p,qty:e.target.value}))}
-                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
-            </div>
-            <div>
-              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Notes</div>
-              <input value={form.notes} onChange={e=>setForm(p=>({...p,notes:e.target.value}))} placeholder="Optional..."
-                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
-            </div>
-            {form.fromLoc===form.toLoc&&<div style={{color:C.danger,fontSize:12}}>⚠ From and To must be different locations.</div>}
-            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-              <Btn variant="secondary" onClick={()=>setShowNew(false)}>Cancel</Btn>
-              <Btn onClick={handleCreate} disabled={!selItem||form.fromLoc===form.toLoc}>Confirm Transfer</Btn>
-            </div>
-          </div>
+        <Modal title="New Stock Transfer" onClose={()=>setShowNew(false)} width={680}>
+          <TransferModal
+            rawMaterials={rawMaterials} finishedGoods={finishedGoods}
+            currentUser={currentUser} dispatch={dispatch}
+            onClose={()=>setShowNew(false)}
+          />
         </Modal>
       )}
     </div>
@@ -4432,7 +4391,8 @@ const Warehouse = ({ S, dispatch, currentUser }) => {
                 const so=salesOrders.find(s=>s.id===e.target.value);
                 setDispForm(p=>({...p,soId:e.target.value,customer:so?.customer||p.customer,qty:so?.qty||p.qty}));
                 if(so){const fg=finishedGoods.find(f=>f.id===so.fgId);if(fg)setDispSel(fg);}
-              }} style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}>
+              }} style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,
+                outline:"none",background:"#fff",color:"#212529"}}>
                 <option value="">— No SO linked —</option>
                 {salesOrders.filter(o=>!["Delivered","Cancelled"].includes(o.status)).map(o=>(
                   <option key={o.id} value={o.id}>{o.id} — {o.customer}</option>
@@ -4442,7 +4402,9 @@ const Warehouse = ({ S, dispatch, currentUser }) => {
             <div>
               <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Customer *</div>
               <input value={dispForm.customer} onChange={e=>setDispForm(p=>({...p,customer:e.target.value}))} placeholder="Customer name"
-                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,
+                  outline:"none",boxSizing:"border-box",background:"#fff",color:"#212529"}}
+                onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
             </div>
             <div>
               <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Product (Finished Good) *</div>
@@ -4451,7 +4413,9 @@ const Warehouse = ({ S, dispatch, currentUser }) => {
                   onChange={e=>{setDispSearch(e.target.value);setDispSel(null);setShowDispDrop(true);}}
                   onFocus={()=>setShowDispDrop(true)} onBlur={()=>setTimeout(()=>setShowDispDrop(false),150)}
                   placeholder="Search finished good..."
-                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,
+                    outline:"none",boxSizing:"border-box",background:"#fff",color:"#212529"}}
+                  onFocusCapture={e=>e.target.style.borderColor=C.primary}/>
                 <SearchDrop items={filteredDisp} show={showDispDrop&&!!dispSearch} onSel={i=>{setDispSel(i);setDispSearch("");setShowDispDrop(false);}}/>
               </div>
             </div>
@@ -4459,18 +4423,24 @@ const Warehouse = ({ S, dispatch, currentUser }) => {
               <div style={{flex:1}}>
                 <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Quantity *</div>
                 <input type="number" min={1} value={dispForm.qty} onChange={e=>setDispForm(p=>({...p,qty:e.target.value}))}
-                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none"}}/>
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,
+                    outline:"none",background:"#fff",color:"#212529"}}
+                  onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
               </div>
               <div style={{flex:1}}>
                 <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Carrier / Method</div>
                 <input value={dispForm.carrier} onChange={e=>setDispForm(p=>({...p,carrier:e.target.value}))} placeholder="DHL, courier, hand delivery..."
-                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,
+                    outline:"none",boxSizing:"border-box",background:"#fff",color:"#212529"}}
+                  onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
               </div>
             </div>
             <div>
-              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Notes</div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Notes / Tracking</div>
               <input value={dispForm.notes} onChange={e=>setDispForm(p=>({...p,notes:e.target.value}))} placeholder="Tracking number, special instructions..."
-                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+                style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,
+                  outline:"none",boxSizing:"border-box",background:"#fff",color:"#212529"}}
+                onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
             </div>
             <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
               <Btn variant="secondary" onClick={()=>setShowDispatch(false)}>Cancel</Btn>
@@ -5584,11 +5554,530 @@ const LocationsModule = ({ S }) => {
   );
 };
 
+// ════════════════════════════════════════════════════════════════════════════
+// TRANSFER MODAL — multi-item, light theme, searchable
+// ════════════════════════════════════════════════════════════════════════════
+const TransferModal = ({ rawMaterials, finishedGoods, currentUser, dispatch, onClose }) => {
+  const [fromLoc, setFromLoc] = useState("warehouse");
+  const [toLoc,   setToLoc]   = useState("production_store");
+  const [notes,   setNotes]   = useState("");
+  const [lines,   setLines]   = useState([]); // [{item, qty}]
+  const [search,  setSearch]  = useState("");
+  const [showDrop,setShowDrop]= useState(false);
+
+  const allItems = [
+    ...rawMaterials.map(m=>({...m, type:"RM", label:`[RM] ${m.internalRef} — ${m.name}`})),
+    ...finishedGoods.map(f=>({...f, type:"FG", label:`[FG] ${f.id} — ${f.name}`})),
+  ];
+  const filtered = allItems
+    .filter(i=>!lines.find(l=>l.item.id===i.id))
+    .filter(i=>!search||i.label.toLowerCase().includes(search.toLowerCase())||
+               (i.category||"").toLowerCase().includes(search.toLowerCase()))
+    .slice(0,15);
+
+  const addLine = i => { setLines(p=>[...p,{item:i,qty:1}]); setSearch(""); setShowDrop(false); };
+  const removeLine = id => setLines(p=>p.filter(l=>l.item.id!==id));
+  const setQty = (id,v) => setLines(p=>p.map(l=>l.item.id===id?{...l,qty:parseInt(v)||1}:l));
+
+  const inp = {width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,
+    fontSize:13,outline:"none",boxSizing:"border-box",background:"#fff",color:"#212529"};
+
+  const handleConfirm = () => {
+    if (!lines.length||fromLoc===toLoc) return;
+    const date = new Date().toISOString().split("T")[0];
+    const time = new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+    lines.forEach(l=>{
+      dispatch({type:"ADD_TRANSFER",payload:{
+        id:genId("TRF"),fromLoc,toLoc,
+        itemId:l.item.id,itemName:l.item.name,itemRef:l.item.internalRef||l.item.id,
+        itemType:l.item.type,qty:l.qty,notes,date,time,
+        createdBy:currentUser.name,status:"Completed"
+      }});
+      dispatch({type:"ADJUST_LOC_STOCK",payload:{locationId:fromLoc,itemId:l.item.id,delta:-l.qty}});
+      dispatch({type:"ADJUST_LOC_STOCK",payload:{locationId:toLoc,itemId:l.item.id,delta:l.qty}});
+    });
+    onClose();
+  };
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      {/* From → To */}
+      <div style={{display:"flex",gap:12,alignItems:"flex-end"}}>
+        <div style={{flex:1}}>
+          <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>From Location</div>
+          <select value={fromLoc} onChange={e=>setFromLoc(e.target.value)} style={inp}>
+            {LOCATIONS.map(l=><option key={l.id} value={l.id}>{l.icon} {l.name}</option>)}
+          </select>
+        </div>
+        <div style={{fontSize:22,color:C.textMid,paddingBottom:6,flexShrink:0}}>→</div>
+        <div style={{flex:1}}>
+          <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>To Location</div>
+          <select value={toLoc} onChange={e=>setToLoc(e.target.value)} style={inp}>
+            {LOCATIONS.filter(l=>l.id!==fromLoc).map(l=><option key={l.id} value={l.id}>{l.icon} {l.name}</option>)}
+          </select>
+        </div>
+      </div>
+      {fromLoc===toLoc&&<div style={{color:C.danger,fontSize:12}}>⚠ From and To must be different locations.</div>}
+
+      {/* Search + add */}
+      <div>
+        <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Add Items to Transfer *</div>
+        <div style={{position:"relative"}}>
+          <input value={search} onChange={e=>{setSearch(e.target.value);setShowDrop(true);}}
+            onFocus={()=>setShowDrop(true)} onBlur={()=>setTimeout(()=>setShowDrop(false),150)}
+            placeholder="Search materials or finished goods by ref, name or category..."
+            style={{...inp,paddingLeft:34}}
+            onFocusCapture={e=>e.target.style.borderColor=C.primary}/>
+          <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:C.textDim,fontSize:14}}>🔍</span>
+          {showDrop&&search&&(
+            <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:200,background:"#fff",
+              border:`1px solid ${C.primary}`,borderRadius:6,boxShadow:"0 4px 16px rgba(0,0,0,.12)",maxHeight:220,overflowY:"auto"}}>
+              {filtered.length===0
+                ? <div style={{padding:"12px",color:C.textMid,fontSize:13}}>No items found for "{search}"</div>
+                : filtered.map(i=>(
+                  <div key={i.id} onMouseDown={()=>addLine(i)}
+                    style={{padding:"10px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,
+                      display:"flex",justifyContent:"space-between",alignItems:"center"}}
+                    onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+                    onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    <div>
+                      <span style={{fontFamily:"monospace",fontSize:10,color:C.textMid}}>{i.internalRef||i.id}</span>
+                      <span style={{fontSize:12,color:C.text,marginLeft:8}}>{i.name.slice(0,55)}</span>
+                    </div>
+                    <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
+                      <Badge label={i.type}/>
+                      <span style={{fontSize:11,color:C.textMid}}>{i.category}</span>
+                      <span style={{fontSize:11,color:C.primary,fontWeight:600}}>+ Add</span>
+                    </div>
+                  </div>
+                ))
+              }
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Lines table */}
+      {lines.length>0 ? (
+        <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{background:"#f9fafb",borderBottom:`1px solid ${C.border}`}}>
+                {["Type","Ref","Item Name","Qty",""].map(h=>(
+                  <th key={h} style={{padding:"8px 12px",textAlign:"left",fontSize:11,fontWeight:600,color:C.textMid,textTransform:"uppercase"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map(l=>(
+                <tr key={l.item.id} style={{borderBottom:`1px solid ${C.border}`}}>
+                  <td style={{padding:"8px 12px"}}><Badge label={l.item.type}/></td>
+                  <td style={{padding:"8px 12px",fontFamily:"monospace",fontSize:11,color:C.textMid}}>{l.item.internalRef||l.item.id}</td>
+                  <td style={{padding:"8px 12px",fontSize:12,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l.item.name}</td>
+                  <td style={{padding:"8px 12px",width:90}}>
+                    <input type="number" min={1} value={l.qty} onChange={e=>setQty(l.item.id,e.target.value)}
+                      style={{width:"100%",padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:4,
+                        fontSize:12,background:"#fff",color:"#212529",outline:"none"}}/>
+                  </td>
+                  <td style={{padding:"8px 12px"}}>
+                    <button onClick={()=>removeLine(l.item.id)}
+                      style={{background:"none",border:"none",cursor:"pointer",color:C.danger,fontSize:16}}>✕</button>
+                  </td>
+                </tr>
+              ))}
+              <tr style={{background:"#f9fafb",borderTop:`2px solid ${C.border}`}}>
+                <td colSpan={3} style={{padding:"8px 12px",fontSize:12,fontWeight:600,color:C.textMid}}>
+                  Total: {lines.length} item type{lines.length!==1?"s":""} · {lines.reduce((s,l)=>s+l.qty,0)} units
+                </td>
+                <td colSpan={2}/>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div style={{background:"#f9fafb",border:`1px dashed ${C.border}`,borderRadius:8,
+          padding:"20px",textAlign:"center",color:C.textDim,fontSize:13}}>
+          Search and add items above to transfer
+        </div>
+      )}
+
+      <div>
+        <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Notes</div>
+        <input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Reason for transfer, batch ref..."
+          style={inp} onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+      </div>
+
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+        <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+        <Btn onClick={handleConfirm} disabled={lines.length===0||fromLoc===toLoc}>
+          Confirm Transfer ({lines.length} item{lines.length!==1?"s":""})
+        </Btn>
+      </div>
+    </div>
+  );
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODULE: MANUFACTURING ORDERS (MO)
+// ════════════════════════════════════════════════════════════════════════════
+const ManufacturingOrders = ({ S, dispatch, currentUser }) => {
+  const { finishedGoods, bom, rawMaterials, salesOrders, manufacturingOrders=[] } = S;
+  const [showNew,  setShowNew]  = useState(false);
+  const [execMO,   setExecMO]   = useState(null); // MO being confirmed for execution
+  const [fgSearch, setFgSearch] = useState("");
+  const [showFgDrop,setShowFgDrop]=useState(false);
+  const [fgSel,    setFgSel]    = useState(null);
+  const [qty,      setQty]      = useState(1);
+  const [soId,     setSoId]     = useState("");
+  const [location, setLocation] = useState("production_store");
+  const [notes,    setNotes]    = useState("");
+
+  const filteredFG = finishedGoods.filter(f=>
+    !fgSearch||f.name.toLowerCase().includes(fgSearch.toLowerCase())||
+    f.id.toLowerCase().includes(fgSearch.toLowerCase())
+  ).slice(0,12);
+
+  const inp = {width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,
+    fontSize:13,outline:"none",boxSizing:"border-box",background:"#fff",color:"#212529"};
+
+  // Feasibility for selected product
+  const bomLines = fgSel ? (bom[fgSel.id]||[]) : [];
+  const feasibility = bomLines.map(line=>{
+    const mat = rawMaterials.find(m=>m.id===line.materialId);
+    const need = line.qty * qty;
+    const has  = mat?.stock||0;
+    return {...line, mat, need, has, ok:has>=need, short:Math.max(0,need-has)};
+  });
+  const canBuild = feasibility.length>0 && feasibility.every(f=>f.ok);
+
+  const handleCreateMO = () => {
+    if (!fgSel||!qty) return;
+    dispatch({type:"ADD_MO", payload:{
+      id:genId("MO"),
+      fgId:fgSel.id, fgName:fgSel.name,
+      qty:parseInt(qty)||1,
+      soId, location, notes,
+      bomLines: bomLines.map(l=>({materialId:l.materialId,qty:l.qty})),
+      status:"Draft",
+      createdBy:currentUser.name,
+      createdDate:new Date().toISOString().split("T")[0],
+    }});
+    setShowNew(false);
+    setFgSel(null); setFgSearch(""); setQty(1); setSoId(""); setNotes("");
+  };
+
+  const handleExecute = (mo) => {
+    dispatch({type:"EXECUTE_MO", payload:{
+      id:mo.id, qty:mo.qty,
+      bomLines:mo.bomLines,
+      completedDate:new Date().toISOString().split("T")[0],
+    }});
+    // Also update linked SO if any
+    if (mo.soId) dispatch({type:"UPDATE_SO",payload:{id:mo.soId,status:"In Production"}});
+    setExecMO(null);
+  };
+
+  // Feasibility check for an existing MO
+  const getMOFeasibility = (mo) => {
+    return (mo.bomLines||[]).map(line=>{
+      const mat = rawMaterials.find(m=>m.id===line.materialId);
+      const need = line.qty * mo.qty;
+      const has  = mat?.stock||0;
+      return {...line,mat,need,has,ok:has>=need,short:Math.max(0,need-has)};
+    });
+  };
+
+  const statusColors = {
+    Draft:{bg:"#f3f4f6",color:"#6b7280"},
+    Confirmed:{bg:"#dbeafe",color:"#1d4ed8"},
+    "In Progress":{bg:"#fef3c7",color:"#92400e"},
+    Done:{bg:"#d1fae5",color:"#065f46"},
+    Cancelled:{bg:"#fee2e2",color:"#991b1b"},
+  };
+
+  return (
+    <div style={{animation:"slide-in .3s ease"}}>
+      <PageHeader title="Manufacturing Orders (MO)"
+        subtitle={`${manufacturingOrders.length} orders · ${manufacturingOrders.filter(m=>m.status==="Done").length} completed`}
+        actions={<Btn icon="+" onClick={()=>setShowNew(true)}>New MO</Btn>}
+      />
+
+      {/* Stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
+        <StatCard label="Total MOs"    value={manufacturingOrders.length}                             icon="🔩" color={C.primary}/>
+        <StatCard label="Draft"        value={manufacturingOrders.filter(m=>m.status==="Draft").length}      icon="📝" color={C.textMid}/>
+        <StatCard label="In Progress"  value={manufacturingOrders.filter(m=>m.status==="In Progress").length}icon="⚙️" color={C.warning}/>
+        <StatCard label="Completed"    value={manufacturingOrders.filter(m=>m.status==="Done").length}       icon="✅" color={C.success}/>
+      </div>
+
+      {/* MO List */}
+      {manufacturingOrders.length===0 ? (
+        <div style={{textAlign:"center",padding:"60px 20px",background:"#fff",borderRadius:10,border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:40,marginBottom:12}}>🔩</div>
+          <div style={{fontSize:16,fontWeight:600,color:C.text,marginBottom:6}}>No Manufacturing Orders yet</div>
+          <div style={{fontSize:13,color:C.textMid,marginBottom:16}}>Create an MO to plan and execute production of a finished good</div>
+          <Btn onClick={()=>setShowNew(true)} icon="+">Create First MO</Btn>
+        </div>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          {manufacturingOrders.map(mo=>{
+            const moFeas = getMOFeasibility(mo);
+            const moCanBuild = moFeas.length>0&&moFeas.every(f=>f.ok);
+            const shortfalls = moFeas.filter(f=>!f.ok);
+            const sc = statusColors[mo.status]||statusColors.Draft;
+            return (
+              <Card key={mo.id}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+                  <div style={{display:"flex",alignItems:"center",gap:12}}>
+                    <div style={{width:44,height:44,borderRadius:10,background:C.primaryLight,
+                      display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>🔩</div>
+                    <div>
+                      <div style={{display:"flex",alignItems:"center",gap:10}}>
+                        <span style={{fontFamily:"monospace",fontSize:12,color:C.primary,fontWeight:600}}>{mo.id}</span>
+                        <span style={{padding:"2px 10px",borderRadius:20,fontSize:11,fontWeight:600,
+                          background:sc.bg,color:sc.color}}>{mo.status}</span>
+                      </div>
+                      <div style={{fontSize:14,fontWeight:600,color:C.text,marginTop:2}}>{mo.fgName}</div>
+                      <div style={{fontSize:12,color:C.textMid,marginTop:1}}>
+                        Qty: {mo.qty} · Location: {LOCATIONS.find(l=>l.id===mo.location)?.name||mo.location} ·
+                        Created: {mo.createdDate} by {mo.createdBy}
+                        {mo.soId&&` · SO: ${mo.soId}`}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    {mo.status!=="Done"&&mo.status!=="Cancelled" && (
+                      <>
+                        {mo.status==="Draft" && (
+                          <Btn small variant="secondary" onClick={()=>dispatch({type:"UPDATE_MO",payload:{id:mo.id,status:"Confirmed"}})}>
+                            Confirm MO
+                          </Btn>
+                        )}
+                        {mo.status==="Confirmed" && (
+                          <Btn small variant="secondary" onClick={()=>dispatch({type:"UPDATE_MO",payload:{id:mo.id,status:"In Progress"}})}>
+                            Start Production
+                          </Btn>
+                        )}
+                        {(mo.status==="Confirmed"||mo.status==="In Progress") && (
+                          <Btn small onClick={()=>setExecMO(mo)} disabled={!moCanBuild}>
+                            {moCanBuild?"✓ Execute MO":"⚠ Materials Short"}
+                          </Btn>
+                        )}
+                        <Btn small variant="secondary" onClick={()=>dispatch({type:"UPDATE_MO",payload:{id:mo.id,status:"Cancelled"}})}>
+                          Cancel
+                        </Btn>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Material requirements */}
+                <div style={{background:"#f9fafb",borderRadius:8,padding:14}}>
+                  <div style={{fontSize:12,fontWeight:600,color:C.textMid,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.04em"}}>
+                    Material Requirements ({moFeas.length} components)
+                  </div>
+                  {moFeas.length===0
+                    ? <div style={{fontSize:12,color:C.textMid}}>No BOM defined for this product</div>
+                    : (
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:8}}>
+                        {moFeas.map(f=>(
+                          <div key={f.materialId} style={{background:"#fff",border:`1px solid ${f.ok?C.border:"#fca5a5"}`,
+                            borderLeft:`3px solid ${f.ok?C.success:C.danger}`,borderRadius:6,padding:"8px 12px"}}>
+                            <div style={{fontSize:10,fontFamily:"monospace",color:C.textMid}}>{f.mat?.internalRef||f.materialId}</div>
+                            <div style={{fontSize:12,fontWeight:500,color:C.text,marginTop:1}}>
+                              {f.mat?.name?.slice(0,40)||f.materialId}
+                            </div>
+                            <div style={{display:"flex",justifyContent:"space-between",marginTop:6}}>
+                              <span style={{fontSize:11,color:C.textMid}}>Need: <strong>{f.need}</strong> {f.mat?.unit}</span>
+                              <span style={{fontSize:11,color:f.ok?C.success:C.danger,fontWeight:600}}>
+                                {f.ok?`✓ Have ${f.has}`:`✗ Short ${f.short}`}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  }
+                  {shortfalls.length>0 && (
+                    <div style={{marginTop:10,padding:"8px 12px",background:"#fef2f2",border:"1px solid #fecaca",
+                      borderRadius:6,fontSize:12,color:C.danger}}>
+                      ⚠ {shortfalls.length} material{shortfalls.length>1?"s are":" is"} short. Receive them via GRN or adjust stock before executing.
+                    </div>
+                  )}
+                  {mo.status==="Done" && (
+                    <div style={{marginTop:10,padding:"8px 12px",background:"#d1fae5",border:"1px solid #6ee7b7",
+                      borderRadius:6,fontSize:12,color:"#065f46",fontWeight:600}}>
+                      ✅ Executed on {mo.completedDate} — materials consumed, {mo.qty} unit{mo.qty>1?"s":""} of {mo.fgName} produced
+                    </div>
+                  )}
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {/* New MO Modal */}
+      {showNew && (
+        <Modal title="New Manufacturing Order" onClose={()=>setShowNew(false)} width={620}>
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            {/* Product search */}
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Product to Manufacture *</div>
+              <div style={{position:"relative"}}>
+                <input value={fgSel?fgSel.name:fgSearch}
+                  onChange={e=>{setFgSearch(e.target.value);setFgSel(null);setShowFgDrop(true);}}
+                  onFocus={()=>setShowFgDrop(true)} onBlur={()=>setTimeout(()=>setShowFgDrop(false),150)}
+                  placeholder="Search product by name or ID..."
+                  style={{...inp,paddingLeft:34}} onFocusCapture={e=>e.target.style.borderColor=C.primary}/>
+                <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:C.textDim,fontSize:14}}>🔍</span>
+                {showFgDrop&&fgSearch&&(
+                  <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:200,background:"#fff",
+                    border:`1px solid ${C.primary}`,borderRadius:6,boxShadow:"0 4px 16px rgba(0,0,0,.12)",maxHeight:220,overflowY:"auto"}}>
+                    {filteredFG.length===0
+                      ? <div style={{padding:"12px",color:C.textMid,fontSize:13}}>No products found</div>
+                      : filteredFG.map(f=>(
+                        <div key={f.id} onMouseDown={()=>{setFgSel(f);setFgSearch(f.name);setShowFgDrop(false);}}
+                          style={{padding:"10px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,
+                            display:"flex",justifyContent:"space-between"}}
+                          onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+                          onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                          <div>
+                            <span style={{fontFamily:"monospace",fontSize:10,color:C.textMid}}>{f.id}</span>
+                            <span style={{fontSize:13,fontWeight:500,marginLeft:8}}>{f.name}</span>
+                          </div>
+                          <span style={{fontSize:11,color:C.textMid}}>{(bom[f.id]||[]).length} BOM lines</span>
+                        </div>
+                      ))
+                    }
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div style={{display:"flex",gap:12}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Quantity *</div>
+                <input type="number" min={1} value={qty} onChange={e=>setQty(parseInt(e.target.value)||1)}
+                  style={inp} onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Production Location</div>
+                <select value={location} onChange={e=>setLocation(e.target.value)} style={inp}>
+                  {LOCATIONS.map(l=><option key={l.id} value={l.id}>{l.icon} {l.name}</option>)}
+                </select>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Linked Sales Order</div>
+                <select value={soId} onChange={e=>setSoId(e.target.value)} style={inp}>
+                  <option value="">— None —</option>
+                  {salesOrders.filter(o=>!["Delivered","Cancelled"].includes(o.status)).map(o=>(
+                    <option key={o.id} value={o.id}>{o.id} — {o.customer}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Notes</div>
+              <input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Special instructions, batch reference..."
+                style={inp} onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+            </div>
+
+            {/* Live feasibility preview */}
+            {fgSel && bomLines.length>0 && (
+              <div style={{background:"#f9fafb",border:`1px solid ${C.border}`,borderRadius:8,padding:14}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                  <span style={{fontSize:13,fontWeight:600,color:C.text}}>Material Requirements Preview</span>
+                  <span style={{padding:"4px 12px",borderRadius:20,fontSize:12,fontWeight:600,
+                    background:canBuild?C.successBg:C.dangerBg,color:canBuild?C.success:C.danger}}>
+                    {canBuild?"✓ All materials available":"⚠ Shortfalls detected"}
+                  </span>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:6}}>
+                  {feasibility.map(f=>(
+                    <div key={f.materialId} style={{background:"#fff",border:`1px solid ${f.ok?C.border:"#fca5a5"}`,
+                      borderLeft:`3px solid ${f.ok?C.success:C.danger}`,borderRadius:6,padding:"7px 10px"}}>
+                      <div style={{fontSize:10,fontFamily:"monospace",color:C.textMid}}>{f.mat?.internalRef}</div>
+                      <div style={{fontSize:11,fontWeight:500,marginTop:1}}>{f.mat?.name?.slice(0,35)}</div>
+                      <div style={{fontSize:11,marginTop:4,color:f.ok?C.success:C.danger,fontWeight:600}}>
+                        Need {f.need} · Have {f.has} {f.ok?"✓":`· Short ${f.short} ✗`}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {fgSel && bomLines.length===0 && (
+              <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:6,padding:"10px 14px",fontSize:13,color:"#92400e"}}>
+                ⚠ No BOM defined for {fgSel.name}. Go to Products & BOMs to add components first.
+              </div>
+            )}
+
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <Btn variant="secondary" onClick={()=>setShowNew(false)}>Cancel</Btn>
+              <Btn onClick={handleCreateMO} disabled={!fgSel||!qty}>Create Manufacturing Order</Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Execute MO Confirmation Modal */}
+      {execMO && (
+        <Modal title={`Execute MO — ${execMO.fgName}`} onClose={()=>setExecMO(null)} width={500}>
+          <div style={{display:"flex",flexDirection:"column",gap:16}}>
+            <div style={{background:"#f0fff4",border:"1px solid #6ee7b7",borderRadius:8,padding:"14px 16px"}}>
+              <div style={{fontSize:14,fontWeight:600,color:"#065f46",marginBottom:6}}>
+                ✅ Ready to Execute — All materials are available
+              </div>
+              <div style={{fontSize:13,color:"#047857"}}>
+                Executing this MO will consume the following materials from stock and mark the MO as Done.
+              </div>
+            </div>
+            <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <thead>
+                  <tr style={{background:"#f9fafb"}}>
+                    {["Material","Will Consume","Current Stock","After"].map(h=>(
+                      <th key={h} style={{padding:"8px 12px",textAlign:"left",fontSize:11,fontWeight:600,color:C.textMid,textTransform:"uppercase"}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {getMOFeasibility(execMO).map(f=>(
+                    <tr key={f.materialId} style={{borderTop:`1px solid ${C.border}`}}>
+                      <td style={{padding:"8px 12px"}}>
+                        <div style={{fontSize:10,fontFamily:"monospace",color:C.textMid}}>{f.mat?.internalRef}</div>
+                        <div style={{fontSize:12}}>{f.mat?.name?.slice(0,40)}</div>
+                      </td>
+                      <td style={{padding:"8px 12px",fontWeight:700,color:C.danger}}>−{f.need} {f.mat?.unit}</td>
+                      <td style={{padding:"8px 12px",fontSize:12}}>{f.has} {f.mat?.unit}</td>
+                      <td style={{padding:"8px 12px",fontWeight:600,color:C.success}}>{f.has-f.need} {f.mat?.unit}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{background:"#dbeafe",border:"1px solid #93c5fd",borderRadius:6,padding:"10px 14px",fontSize:13,color:"#1e40af",fontWeight:500}}>
+              📦 Result: {execMO.qty} × {execMO.fgName} will be produced
+            </div>
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <Btn variant="secondary" onClick={()=>setExecMO(null)}>Cancel</Btn>
+              <Btn onClick={()=>handleExecute(execMO)}>✓ Confirm & Execute MO</Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+};
+
 const NAV = [
   { id:"dash",       label:"Dashboard",       icon:"⊞",  group:"Main" },
   { id:"analysis",   label:"Analysis",        icon:"📊", group:"Main" },
   { id:"sales",      label:"Sales Orders",    icon:"📋", group:"Operations" },
   { id:"mfg",        label:"Manufacturing",   icon:"⚙️", group:"Operations" },
+  { id:"mo",         label:"Mfg Orders (MO)", icon:"🔩", group:"Operations" },
   { id:"prod",       label:"Production",      icon:"🏭", group:"Operations" },
   { id:"inv",        label:"Inventory",       icon:"📦", group:"Operations" },
   { id:"proc",       label:"Procurement",     icon:"🛒", group:"Operations" },
@@ -5800,6 +6289,7 @@ export default function App() {
             {safeActive==="dash"       && <Dashboard     S={S} />}
             {safeActive==="analysis"   && <Analysis      S={S} />}
             {safeActive==="mfg"        && <Manufacturing S={S} />}
+            {safeActive==="mo"         && <ManufacturingOrders S={S} dispatch={dispatch} currentUser={currentUser} />}
             {safeActive==="inv"        && <Inventory     S={S} dispatch={dispatch} />}
             {safeActive==="sales"      && <SalesOrders   S={S} dispatch={dispatch} />}
             {safeActive==="prod"       && <Production    S={S} dispatch={dispatch} />}
