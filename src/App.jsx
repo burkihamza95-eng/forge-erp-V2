@@ -1825,6 +1825,7 @@ const C = {
   text:       "#212529",
   textMid:    "#6c757d",
   textLight:  "#adb5bd",
+  textDim:    "#adb5bd",
   primary:    "#714b67",    // Odoo purple
   primaryHov: "#5c3d55",
   primaryLight:"#f3eef1",
@@ -1832,6 +1833,7 @@ const C = {
   successBg:  "#d4edda",
   warning:    "#ffc107",
   warningBg:  "#fff3cd",
+  amberL:     "#fffbeb",
   danger:     "#dc3545",
   dangerBg:   "#f8d7da",
   info:       "#17a2b8",
@@ -3959,8 +3961,6 @@ const Procurement = ({ S, dispatch }) => {
           onSave={po=>{ dispatch({type:"ADD_PO",payload:po}); setShowAdd(false); setPreloadLines([]); }}
         />
       )}
-    </div>
-  );
     </div>
   );
 };
