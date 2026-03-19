@@ -1775,6 +1775,7 @@ function appReducer(state, { type, payload }) {
   switch(type) {
     case "ADD_SO":        return { ...state, salesOrders: [payload, ...state.salesOrders] };
     case "UPDATE_SO":     return { ...state, salesOrders: state.salesOrders.map(o => o.id===payload.id ? {...o,...payload} : o) };
+    case "DELETE_SO":     return { ...state, salesOrders: state.salesOrders.filter(o => o.id!==payload) };
     case "ADD_WO":        return { ...state, workOrders: [payload, ...state.workOrders] };
     case "UPDATE_WO":     return { ...state, workOrders: state.workOrders.map(w => w.id===payload.id ? {...w,...payload} : w) };
     case "ADD_PO":        return { ...state, purchaseOrders: [payload, ...state.purchaseOrders] };
@@ -3134,106 +3135,267 @@ const Inventory = ({ S, dispatch }) => {
 };
 
 // ════════════════════════════════════════════════════════════════════════════
+// SALES ORDER FORM MODAL (outside to prevent re-mount)
+// ════════════════════════════════════════════════════════════════════════════
+const SOFormModal = ({ initial, finishedGoods, onSave, onClose }) => {
+  const isEdit = !!initial?.id;
+  const blank = { customer:"", subject:"", fgId:"", qty:1, dueDate:"", priority:"NORMAL", notes:"", unitPrice:"" };
+  const [form, setForm] = useState(isEdit ? {...initial, unitPrice:initial.unitPrice||initial.total/initial.qty||0} : blank);
+  const [fgSearch, setFgSearch]   = useState(isEdit ? (finishedGoods.find(f=>f.id===initial.fgId)?.name||"") : "");
+  const [showFgDrop, setShowFgDrop] = useState(false);
+  const [fgSel, setFgSel]         = useState(isEdit ? finishedGoods.find(f=>f.id===initial.fgId)||null : null);
+  const set = k => e => setForm(p=>({...p,[k]:e.target.value}));
+
+  const filteredFG = finishedGoods.filter(f=>
+    !fgSearch || f.id.toLowerCase().includes(fgSearch.toLowerCase()) ||
+    f.name.toLowerCase().includes(fgSearch.toLowerCase()) ||
+    f.category?.toLowerCase().includes(fgSearch.toLowerCase())
+  ).slice(0,12);
+
+  const selectFG = f => { setFgSel(f); setFgSearch(f.name); setForm(p=>({...p,fgId:f.id,unitPrice:f.basePrice||0})); setShowFgDrop(false); };
+
+  const unitPrice = parseFloat(form.unitPrice)||fgSel?.basePrice||0;
+  const qty       = parseInt(form.qty)||1;
+  const total     = unitPrice * qty;
+
+  const inp = {width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,
+    outline:"none",boxSizing:"border-box",background:"#fff",color:"#212529"};
+
+  const handleSave = () => {
+    if (!form.customer||!fgSel) return;
+    onSave({
+      ...(isEdit?initial:{}), ...form,
+      fgId:fgSel.id, qty, unitPrice, total,
+      ...(isEdit?{}:{id:genId("SO"), date:new Date().toISOString().split("T")[0], status:"Quote"})
+    });
+    onClose();
+  };
+
+  return (
+    <Modal title={isEdit?"Edit Sales Order":"New Sales Order"} onClose={onClose} width={580}>
+      <div style={{display:"flex",flexDirection:"column",gap:14}}>
+        <div style={{display:"flex",gap:12}}>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Customer Name *</div>
+            <input value={form.customer} onChange={set("customer")} placeholder="e.g. Meridian Defence" style={inp}
+              onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>SO Subject / Reference</div>
+            <input value={form.subject||""} onChange={set("subject")} placeholder="e.g. Q1 2025 order, Tactical kit batch" style={inp}
+              onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+          </div>
+        </div>
+
+        {/* Product searchable */}
+        <div>
+          <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Product *</div>
+          <div style={{position:"relative"}}>
+            <input value={fgSearch}
+              onChange={e=>{setFgSearch(e.target.value);setFgSel(null);setForm(p=>({...p,fgId:""}));setShowFgDrop(true);}}
+              onFocus={()=>setShowFgDrop(true)} onBlur={()=>setTimeout(()=>setShowFgDrop(false),150)}
+              placeholder="Search by product name, ID or category..."
+              style={{...inp,paddingLeft:34}}
+              onFocusCapture={e=>e.target.style.borderColor=C.primary}/>
+            <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:C.textDim,fontSize:14}}>🔍</span>
+            {showFgDrop && (
+              <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:200,background:"#fff",
+                border:`1px solid ${C.primary}`,borderRadius:6,boxShadow:"0 4px 16px rgba(0,0,0,.12)",maxHeight:240,overflowY:"auto"}}>
+                {filteredFG.length===0
+                  ? <div style={{padding:"12px",color:C.textMid,fontSize:13}}>No products found{fgSearch?` for "${fgSearch}"`:""}. Add products in the BOM & Products module.</div>
+                  : filteredFG.map(f=>(
+                    <div key={f.id} onMouseDown={()=>selectFG(f)}
+                      style={{padding:"10px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,
+                        background:fgSel?.id===f.id?C.primaryLight:"transparent"}}
+                      onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+                      onMouseLeave={e=>e.currentTarget.style.background=fgSel?.id===f.id?C.primaryLight:"transparent"}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                        <div>
+                          <span style={{fontFamily:"monospace",fontSize:10,color:C.textMid}}>{f.id}</span>
+                          <span style={{fontSize:13,fontWeight:500,color:C.text,marginLeft:8}}>{f.name}</span>
+                        </div>
+                        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                          <span style={{fontSize:11,color:C.textMid}}>{f.category}</span>
+                          <span style={{fontSize:12,fontWeight:600,color:C.success}}>{fmt$(f.basePrice)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                }
+              </div>
+            )}
+          </div>
+          {fgSel && (
+            <div style={{marginTop:6,background:C.primaryLight,border:`1px solid ${C.border}`,
+              borderRadius:6,padding:"8px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:12,fontWeight:500,color:C.primary}}>{fgSel.name}</span>
+              <span style={{fontSize:11,color:C.textMid}}>{fgSel.category} · Base price: {fmt$(fgSel.basePrice)}</span>
+              <button onMouseDown={()=>{setFgSel(null);setFgSearch("");setForm(p=>({...p,fgId:"",unitPrice:""}));}}
+                style={{background:"none",border:"none",cursor:"pointer",color:C.textMid,fontSize:14}}>✕</button>
+            </div>
+          )}
+        </div>
+
+        <div style={{display:"flex",gap:12}}>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Quantity *</div>
+            <input type="number" min={1} value={form.qty} onChange={set("qty")} style={inp}
+              onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Unit Price (PKR)</div>
+            <input type="number" min={0} value={form.unitPrice} onChange={set("unitPrice")} style={inp}
+              onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Due Date</div>
+            <input type="date" value={form.dueDate} onChange={set("dueDate")} style={inp}
+              onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+          </div>
+        </div>
+
+        <div style={{display:"flex",gap:12}}>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Priority</div>
+            <select value={form.priority} onChange={set("priority")} style={inp}>
+              <option value="NORMAL">Normal</option>
+              <option value="HIGH">High Priority</option>
+            </select>
+          </div>
+          {isEdit && (
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Status</div>
+              <select value={form.status} onChange={set("status")} style={inp}>
+                {["Quote","Pending","Picking","In Production","Shipped","Delivered","Cancelled"].map(s=><option key={s}>{s}</option>)}
+              </select>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Notes</div>
+          <input value={form.notes} onChange={set("notes")} placeholder="Special requirements, delivery instructions..." style={inp}
+            onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+        </div>
+
+        {fgSel && qty>0 && (
+          <div style={{background:"#f0fff4",border:"1px solid #c6f6d5",borderRadius:6,padding:"10px 14px",
+            display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:13,color:C.textMid}}>{qty} × {fgSel.name}</span>
+            <span style={{fontSize:15,fontWeight:700,color:C.success}}>Total: {fmt$(total)}</span>
+          </div>
+        )}
+
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={handleSave} disabled={!form.customer||!fgSel}>
+            {isEdit?"Save Changes":"Create Order"}
+          </Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
+// ════════════════════════════════════════════════════════════════════════════
 // MODULE: SALES ORDERS
 // ════════════════════════════════════════════════════════════════════════════
 const SalesOrders = ({ S, dispatch }) => {
   const { salesOrders, finishedGoods } = S;
   const [showAdd, setShowAdd] = useState(false);
-  const [filter, setFilter] = useState("all");
-  const [form, setForm] = useState({ customer:"", fgId:"", qty:1, dueDate:"", priority:"NORMAL", notes:"" });
-
-  const filtered = salesOrders.filter(o => filter==="all" || o.status===filter);
+  const [editSO, setEditSO]   = useState(null);
+  const [filter, setFilter]   = useState("all");
+  const [search, setSearch]   = useState("");
 
   const statusOptions = ["Quote","Pending","Picking","In Production","Shipped","Delivered","Cancelled"];
+
+  const filtered = salesOrders
+    .filter(o => filter==="all" || o.status===filter)
+    .filter(o => !search ||
+      o.customer.toLowerCase().includes(search.toLowerCase()) ||
+      o.id.toLowerCase().includes(search.toLowerCase()) ||
+      (o.subject||"").toLowerCase().includes(search.toLowerCase()) ||
+      (finishedGoods.find(f=>f.id===o.fgId)?.name||"").toLowerCase().includes(search.toLowerCase())
+    );
 
   return (
     <div style={{ animation:"slide-in .3s ease" }}>
       <PageHeader title="Sales Orders"
-        subtitle={`${salesOrders.length} total · ${fmt$(salesOrders.reduce((s,o)=>s+o.total,0))} pipeline`}
+        subtitle={`${salesOrders.length} total · ${fmt$(salesOrders.filter(o=>!["Cancelled"].includes(o.status)).reduce((s,o)=>s+(o.total||0),0))} pipeline`}
         actions={<Btn icon="+" onClick={()=>setShowAdd(true)}>New Order</Btn>}
       />
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:20 }}>
         <StatCard label="Total Orders"   value={salesOrders.length} icon="📋" color={C.primary} />
-        <StatCard label="Pipeline"       value={fmt$(salesOrders.filter(o=>!["Cancelled"].includes(o.status)).reduce((s,o)=>s+o.total,0))} icon="📈" color={C.info} />
+        <StatCard label="Pipeline"       value={fmt$(salesOrders.filter(o=>!["Cancelled"].includes(o.status)).reduce((s,o)=>s+(o.total||0),0))} icon="📈" color={C.info} />
         <StatCard label="Shipped"        value={salesOrders.filter(o=>["Shipped","Delivered"].includes(o.status)).length} icon="🚚" color={C.success} />
         <StatCard label="High Priority"  value={salesOrders.filter(o=>o.priority==="HIGH"&&!["Delivered","Cancelled"].includes(o.status)).length} icon="🔴" color={C.danger} />
       </div>
 
+      {/* Filter + search bar */}
       <Card style={{ marginBottom:16, padding:12 }}>
-        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-          {["all",...statusOptions].map(s=>(
-            <button key={s} onClick={()=>setFilter(s)}
-              style={{ padding:"5px 14px", borderRadius:20, border:`1px solid ${filter===s?C.primary:C.border}`,
-                background: filter===s?C.primaryLight:"#fff", color:filter===s?C.primary:C.textMid,
-                fontSize:12, cursor:"pointer", fontWeight:filter===s?600:400 }}>
-              {s==="all"?"All":s} ({s==="all"?salesOrders.length:salesOrders.filter(o=>o.status===s).length})
-            </button>
-          ))}
+        <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+          <div style={{position:"relative",flex:"1 1 200px",minWidth:180}}>
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search orders, customers, products..."
+              style={{width:"100%",padding:"7px 10px 7px 32px",border:`1px solid ${C.border}`,borderRadius:6,
+                fontSize:12,outline:"none",boxSizing:"border-box",background:"#fff",color:C.text}}
+              onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+            <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:C.textDim,fontSize:12}}>🔍</span>
+          </div>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {["all",...statusOptions].map(s=>(
+              <button key={s} onClick={()=>setFilter(s)}
+                style={{ padding:"5px 12px", borderRadius:20, border:`1px solid ${filter===s?C.primary:C.border}`,
+                  background: filter===s?C.primaryLight:"#fff", color:filter===s?C.primary:C.textMid,
+                  fontSize:11, cursor:"pointer", fontWeight:filter===s?600:400, whiteSpace:"nowrap" }}>
+                {s==="all"?"All":s} ({s==="all"?salesOrders.length:salesOrders.filter(o=>o.status===s).length})
+              </button>
+            ))}
+          </div>
         </div>
       </Card>
 
       <Card pad={false}>
-        <Table heads={["Order ID","Customer","Product","Qty","Total","Due","Priority","Status","Action"]}>
+        <Table heads={["Order ID","Subject","Customer","Product","Qty","Total","Due","Priority","Status","Actions"]}>
           {filtered.map(o => {
             const fg = finishedGoods.find(f=>f.id===o.fgId);
             return (
               <TR key={o.id} cells={[
-                <span style={{fontFamily:"monospace",fontSize:11}}>{o.id}</span>,
+                <span style={{fontFamily:"monospace",fontSize:11,color:C.primary}}>{o.id}</span>,
+                <span style={{fontSize:11,color:C.textMid,maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block"}}>{o.subject||"—"}</span>,
                 <span style={{fontWeight:500}}>{o.customer}</span>,
-                <span style={{fontSize:12,color:C.textMid,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block"}}>{fg?.name||o.fgId}</span>,
+                <span style={{fontSize:12,color:C.textMid,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block"}}>{fg?.name||o.fgId}</span>,
                 <span style={{fontWeight:600}}>{o.qty}</span>,
                 <span style={{fontWeight:600,color:C.primary}}>{fmt$(o.total)}</span>,
                 <span style={{fontSize:12,color:C.textMid}}>{fmtDt(o.dueDate)}</span>,
                 <Badge label={o.priority}/>,
                 <Badge label={o.status}/>,
-                <Sel value={o.status} onChange={e=>dispatch({type:"UPDATE_SO",payload:{...o,status:e.target.value}})}
-                  style={{width:130,padding:"4px 8px",fontSize:12}}>
-                  {statusOptions.map(s=><option key={s} value={s}>{s}</option>)}
-                </Sel>
+                <div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
+                  <Sel value={o.status} onChange={e=>dispatch({type:"UPDATE_SO",payload:{...o,status:e.target.value}})}
+                    style={{width:120,padding:"3px 6px",fontSize:11}}>
+                    {statusOptions.map(s=><option key={s} value={s}>{s}</option>)}
+                  </Sel>
+                  <button onClick={e=>{e.stopPropagation();setEditSO(o);}}
+                    style={{padding:"3px 8px",background:C.primaryLight,border:`1px solid ${C.border}`,
+                      borderRadius:4,cursor:"pointer",fontSize:11,color:C.primary,fontWeight:500}}>✏️</button>
+                  <button onClick={e=>{e.stopPropagation();if(window.confirm(`Delete order ${o.id}?`)) dispatch({type:"DELETE_SO",payload:o.id});}}
+                    style={{padding:"3px 8px",background:"#fff5f5",border:`1px solid #fecaca`,
+                      borderRadius:4,cursor:"pointer",fontSize:11,color:C.danger,fontWeight:500}}>🗑️</button>
+                </div>
               ]}/>
             );
           })}
         </Table>
+        {filtered.length===0 && <div style={{padding:30,textAlign:"center",color:C.textMid}}>No orders found. {search&&"Try clearing the search."}</div>}
       </Card>
 
       {showAdd && (
-        <Modal title="New Sales Order" onClose={()=>setShowAdd(false)}>
-          <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-            <Input label="Customer Name" value={form.customer} onChange={e=>setForm({...form,customer:e.target.value})} />
-            <Sel label="Product" value={form.fgId} onChange={e=>setForm({...form,fgId:e.target.value,
-              price:finishedGoods.find(f=>f.id===e.target.value)?.basePrice||0})}>
-              <option value="">Select product...</option>
-              {finishedGoods.map(f=><option key={f.id} value={f.id}>{f.name} — {fmt$(f.basePrice)}</option>)}
-            </Sel>
-            <div style={{display:"flex",gap:12}}>
-              <div style={{flex:1}}><Input label="Quantity" type="number" min={1} value={form.qty}
-                onChange={e=>setForm({...form,qty:parseInt(e.target.value)||1})} /></div>
-              <div style={{flex:1}}><Input label="Due Date" type="date" value={form.dueDate}
-                onChange={e=>setForm({...form,dueDate:e.target.value})} /></div>
-            </div>
-            <Sel label="Priority" value={form.priority} onChange={e=>setForm({...form,priority:e.target.value})}>
-              <option value="NORMAL">Normal</option>
-              <option value="HIGH">High</option>
-            </Sel>
-            <Input label="Notes" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} />
-            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-              <Btn variant="secondary" onClick={()=>setShowAdd(false)}>Cancel</Btn>
-              <Btn onClick={()=>{
-                if(!form.customer||!form.fgId) return;
-                const fg = finishedGoods.find(f=>f.id===form.fgId);
-                dispatch({type:"ADD_SO",payload:{
-                  ...form, id:genId("SO"),
-                  date: new Date().toISOString().split("T")[0],
-                  status:"Quote",
-                  total: (fg?.basePrice||0)*form.qty
-                }});
-                setShowAdd(false);
-                setForm({customer:"",fgId:"",qty:1,dueDate:"",priority:"NORMAL",notes:""});
-              }}>Create Order</Btn>
-            </div>
-          </div>
-        </Modal>
+        <SOFormModal finishedGoods={finishedGoods} onClose={()=>setShowAdd(false)}
+          onSave={so=>dispatch({type:"ADD_SO",payload:so})} />
+      )}
+      {editSO && (
+        <SOFormModal initial={editSO} finishedGoods={finishedGoods} onClose={()=>setEditSO(null)}
+          onSave={so=>dispatch({type:"UPDATE_SO",payload:so})} />
       )}
     </div>
   );
@@ -3338,17 +3500,43 @@ const Production = ({ S, dispatch }) => {
 };
 
 // ════════════════════════════════════════════════════════════════════════════
-// PROCUREMENT MODAL — multi-item, subject field, light theme inputs
+// PROCUREMENT MODAL — multi-item, subject, preload, draft saving, light theme
 // ════════════════════════════════════════════════════════════════════════════
-const ProcurementModal = ({ rawMaterials, suppliers, onClose, onSave }) => {
-  const [supplierQ, setSupplierQ]     = useState("");
-  const [supplierSel, setSupplierSel] = useState(null);
+const ProcurementModal = ({ rawMaterials, suppliers, onClose, onSave, preloadLines=[] }) => {
+  const DRAFT_KEY = "shibli_po_draft";
+
+  // Load draft from localStorage on mount, or use preloadLines
+  const loadDraft = () => {
+    if (preloadLines.length > 0) return { lines:preloadLines, supplierQ:"", supplierSel:null, subject:"", etaDate:"" };
+    try {
+      const d = localStorage.getItem(DRAFT_KEY);
+      if (d) return JSON.parse(d);
+    } catch(e) {}
+    return { lines:[], supplierQ:"", supplierSel:null, subject:"", etaDate:"" };
+  };
+
+  const draft = loadDraft();
+  const [supplierQ, setSupplierQ]     = useState(draft.supplierQ||"");
+  const [supplierSel, setSupplierSel] = useState(draft.supplierSel||null);
   const [showSupDrop, setShowSupDrop] = useState(false);
-  const [subject, setSubject]         = useState("");
-  const [etaDate, setEtaDate]         = useState("");
-  const [lines, setLines]             = useState([]); // [{mat, qty, unitPrice}]
+  const [subject, setSubject]         = useState(draft.subject||"");
+  const [etaDate, setEtaDate]         = useState(draft.etaDate||"");
+  const [lines, setLines]             = useState(draft.lines||[]);
   const [matQ, setMatQ]               = useState("");
   const [showMatDrop, setShowMatDrop] = useState(false);
+  const [draftSaved, setDraftSaved]   = useState(false);
+
+  // Save draft whenever lines or fields change
+  useEffect(()=>{
+    if (lines.length===0&&!subject&&!supplierQ) return;
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({lines,supplierQ,supplierSel,subject,etaDate}));
+      setDraftSaved(true);
+      setTimeout(()=>setDraftSaved(false), 2000);
+    } catch(e) {}
+  }, [lines, subject, supplierQ, supplierSel, etaDate]);
+
+  const clearDraft = () => { try{ localStorage.removeItem(DRAFT_KEY); }catch(e){} };
 
   const filteredSup = suppliers.filter(s=>!supplierQ||s.name.toLowerCase().includes(supplierQ.toLowerCase())).slice(0,10);
   const filteredMat = rawMaterials.filter(m=>
@@ -3368,13 +3556,44 @@ const ProcurementModal = ({ rawMaterials, suppliers, onClose, onSave }) => {
 
   const inp = { width:"100%", padding:"8px 10px", border:`1px solid ${C.border}`,
     borderRadius:6, fontSize:13, outline:"none", boxSizing:"border-box",
-    background:"#fff", color:C.text };
+    background:"#fff", color:"#212529" };
 
   return (
-    <Modal title="New Purchase Order" onClose={onClose} width={680}>
+    <Modal title="New Purchase Order" onClose={()=>{ /* don't clear draft on close */ onClose(); }} width={700}>
       <div style={{display:"flex",flexDirection:"column",gap:16}}>
 
-        {/* Row 1: Supplier + Subject */}
+        {/* Draft indicator */}
+        {draftSaved && (
+          <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:C.success,
+            background:C.successBg,borderRadius:4,padding:"4px 10px",alignSelf:"flex-start"}}>
+            💾 Draft auto-saved
+          </div>
+        )}
+        {preloadLines.length===0 && (() => {
+          try {
+            const d = localStorage.getItem(DRAFT_KEY);
+            if (d) {
+              const parsed = JSON.parse(d);
+              if (parsed.lines?.length > 0 && lines.length===0) {
+                return (
+                  <div style={{background:C.amberL||"#fffbeb",border:`1px solid #fde68a`,borderRadius:6,
+                    padding:"10px 14px",fontSize:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <span style={{color:"#92400e"}}>📋 A draft PO with {parsed.lines.length} item(s) was found.</span>
+                    <div style={{display:"flex",gap:6}}>
+                      <button onClick={()=>setLines(parsed.lines)} style={{padding:"4px 10px",background:C.primary,
+                        color:"#fff",border:"none",borderRadius:4,cursor:"pointer",fontSize:11}}>Restore Draft</button>
+                      <button onClick={clearDraft} style={{padding:"4px 10px",background:"#fff",
+                        border:`1px solid ${C.border}`,borderRadius:4,cursor:"pointer",fontSize:11,color:C.textMid}}>Discard</button>
+                    </div>
+                  </div>
+                );
+              }
+            }
+          } catch(e){}
+          return null;
+        })()}
+
+        {/* Row 1: Supplier + Subject + ETA */}
         <div style={{display:"flex",gap:12}}>
           <div style={{flex:1}}>
             <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Supplier</div>
@@ -3384,11 +3603,11 @@ const ProcurementModal = ({ rawMaterials, suppliers, onClose, onSave }) => {
                 onFocus={()=>setShowSupDrop(true)} onBlur={()=>setTimeout(()=>setShowSupDrop(false),150)}
                 placeholder="Search or type supplier name..."
                 style={inp} onFocusCapture={e=>e.target.style.borderColor=C.primary}/>
-              {showSupDrop&&supplierQ&&(
+              {showSupDrop&&(supplierQ||true)&&filteredSup.length>0&&(
                 <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:200,background:"#fff",
                   border:`1px solid ${C.primary}`,borderRadius:6,boxShadow:"0 4px 16px rgba(0,0,0,.12)",maxHeight:200,overflowY:"auto"}}>
                   {filteredSup.map(s=>(
-                    <div key={s.id} onMouseDown={()=>{setSupplierSel(s);setSupplierQ(s.name);setShowSupDrop(false);}}
+                    <div key={s.id||s.name} onMouseDown={()=>{setSupplierSel(s);setSupplierQ(s.name);setShowSupDrop(false);}}
                       style={{padding:"9px 12px",cursor:"pointer",fontSize:13,borderBottom:`1px solid ${C.border}`}}
                       onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
                       onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
@@ -3396,12 +3615,14 @@ const ProcurementModal = ({ rawMaterials, suppliers, onClose, onSave }) => {
                       <span style={{fontSize:11,color:C.textMid,marginLeft:8}}>{s.category}</span>
                     </div>
                   ))}
-                  <div onMouseDown={()=>{setSupplierSel({id:"new",name:supplierQ});setShowSupDrop(false);}}
-                    style={{padding:"9px 12px",cursor:"pointer",fontSize:13,color:C.primary,fontStyle:"italic"}}
-                    onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
-                    onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                    + Add "{supplierQ}" as new supplier
-                  </div>
+                  {supplierQ&&!filteredSup.find(s=>s.name.toLowerCase()===supplierQ.toLowerCase())&&(
+                    <div onMouseDown={()=>{setSupplierSel({id:"new",name:supplierQ});setShowSupDrop(false);}}
+                      style={{padding:"9px 12px",cursor:"pointer",fontSize:13,color:C.primary,fontStyle:"italic"}}
+                      onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+                      onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                      + Add "{supplierQ}" as new supplier
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -3409,7 +3630,7 @@ const ProcurementModal = ({ rawMaterials, suppliers, onClose, onSave }) => {
           <div style={{flex:1}}>
             <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>PO Subject / Description</div>
             <input value={subject} onChange={e=>setSubject(e.target.value)}
-              placeholder="e.g. Monthly fasteners restock, PCB order..."
+              placeholder="e.g. Monthly fasteners restock..."
               style={inp} onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
           </div>
           <div style={{flex:"0 0 140px"}}>
@@ -3419,7 +3640,7 @@ const ProcurementModal = ({ rawMaterials, suppliers, onClose, onSave }) => {
           </div>
         </div>
 
-        {/* Material search + add */}
+        {/* Material search */}
         <div>
           <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Add Materials *</div>
           <div style={{position:"relative"}}>
@@ -3435,7 +3656,8 @@ const ProcurementModal = ({ rawMaterials, suppliers, onClose, onSave }) => {
                   ? <div style={{padding:"12px",color:C.textMid,fontSize:13}}>No materials found for "{matQ}"</div>
                   : filteredMat.map(m=>(
                     <div key={m.id} onMouseDown={()=>addLine(m)}
-                      style={{padding:"10px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}
+                      style={{padding:"10px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,
+                        display:"flex",justifyContent:"space-between",alignItems:"center"}}
                       onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
                       onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                       <div>
@@ -3456,7 +3678,7 @@ const ProcurementModal = ({ rawMaterials, suppliers, onClose, onSave }) => {
         </div>
 
         {/* Lines table */}
-        {lines.length > 0 && (
+        {lines.length > 0 ? (
           <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
             <table style={{width:"100%",borderCollapse:"collapse"}}>
               <thead>
@@ -3470,14 +3692,14 @@ const ProcurementModal = ({ rawMaterials, suppliers, onClose, onSave }) => {
                 {lines.map(l=>(
                   <tr key={l.mat.id} style={{borderBottom:`1px solid ${C.border}`}}>
                     <td style={{padding:"8px 12px",fontFamily:"monospace",fontSize:11,color:C.textMid}}>{l.mat.internalRef}</td>
-                    <td style={{padding:"8px 12px",fontSize:12,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l.mat.name}</td>
+                    <td style={{padding:"8px 12px",fontSize:12,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l.mat.name}</td>
                     <td style={{padding:"8px 12px",width:80}}>
                       <input type="number" min={1} value={l.qty} onChange={e=>setLineQty(l.mat.id,e.target.value)}
-                        style={{width:"100%",padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:4,fontSize:12,background:"#fff",color:C.text,outline:"none"}}/>
+                        style={{width:"100%",padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:4,fontSize:12,background:"#fff",color:"#212529",outline:"none"}}/>
                     </td>
                     <td style={{padding:"8px 12px",width:130}}>
                       <input type="number" min={0} step="0.01" value={l.unitPrice} onChange={e=>setLinePrice(l.mat.id,e.target.value)}
-                        style={{width:"100%",padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:4,fontSize:12,background:"#fff",color:C.text,outline:"none"}}/>
+                        style={{width:"100%",padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:4,fontSize:12,background:"#fff",color:"#212529",outline:"none"}}/>
                     </td>
                     <td style={{padding:"8px 12px",fontFamily:"monospace",fontSize:12,fontWeight:600,color:C.primary}}>{fmt$(l.qty*l.unitPrice)}</td>
                     <td style={{padding:"8px 12px"}}>
@@ -3487,29 +3709,30 @@ const ProcurementModal = ({ rawMaterials, suppliers, onClose, onSave }) => {
                   </tr>
                 ))}
                 <tr style={{background:"#f9fafb",borderTop:`2px solid ${C.border}`}}>
-                  <td colSpan={4} style={{padding:"10px 12px",fontSize:13,fontWeight:600,color:C.text,textAlign:"right"}}>Grand Total:</td>
+                  <td colSpan={4} style={{padding:"10px 12px",fontSize:13,fontWeight:600,textAlign:"right",color:C.text}}>Grand Total:</td>
                   <td style={{padding:"10px 12px",fontFamily:"monospace",fontSize:14,fontWeight:700,color:C.primary}}>{fmt$(total)}</td>
                   <td/>
                 </tr>
               </tbody>
             </table>
           </div>
-        )}
-        {lines.length===0 && (
-          <div style={{background:"#f9fafb",border:`1px dashed ${C.border}`,borderRadius:8,padding:"20px",textAlign:"center",color:C.textDim,fontSize:13}}>
-            Search and add materials above to build your PO line items
+        ) : (
+          <div style={{background:"#f9fafb",border:`1px dashed ${C.border}`,borderRadius:8,
+            padding:"20px",textAlign:"center",color:C.textDim,fontSize:13}}>
+            Search and add materials above to build your PO
           </div>
         )}
 
         <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-          <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+          <Btn variant="secondary" onClick={onClose}>Cancel (Draft Saved)</Btn>
           <Btn onClick={()=>{
             if(lines.length===0) return;
+            clearDraft();
             onSave({
               id:genId("PO"), subject,
-              supplierId:supplierSel?.id||"", supplierName:supplierSel?.name||"",
-              lines: lines.map(l=>({materialId:l.mat.id,materialRef:l.mat.internalRef,materialName:l.mat.name,qty:l.qty,unitPrice:l.unitPrice,lineTotal:l.qty*l.unitPrice})),
-              materialId: lines[0]?.mat.id||"", // for backward compat
+              supplierId:supplierSel?.id||"", supplierName:supplierSel?.name||supplierQ||"",
+              lines:lines.map(l=>({materialId:l.mat.id,materialRef:l.mat.internalRef,materialName:l.mat.name,qty:l.qty,unitPrice:l.unitPrice,lineTotal:l.qty*l.unitPrice})),
+              materialId:lines[0]?.mat.id||"",
               total, etaDate, status:"Confirmed",
               date:new Date().toISOString().split("T")[0]
             });
@@ -3597,90 +3820,147 @@ const AddPartModal = ({ onClose, dispatch, rawMaterials }) => {
 };
 
 const Procurement = ({ S, dispatch }) => {
-  const { purchaseOrders, rawMaterials, suppliers } = S;
+  const { purchaseOrders, rawMaterials, workOrders, bom, finishedGoods } = S;
+  const vendors = S.vendors || [];
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ supplierId:"", materialId:"", qty:1, unitPrice:0, etaDate:"" });
+  const [preloadLines, setPreloadLines] = useState([]); // pre-fill PO with urgent items
 
   const statusOptions = ["Confirmed","Ordered","In Transit","Received","Cancelled"];
-  const critMats = rawMaterials.filter(m=>m.stock<=m.minStock);
+
+  // ── Compute production-urgent materials (same logic as Inventory) ──
+  const activeWOs = (workOrders||[]).filter(w=>["In Progress","Scheduled"].includes(w.status));
+  const urgentMap = {}; // materialId -> {needed, short, mat}
+  activeWOs.forEach(wo=>{
+    (bom[wo.fgId]||[]).forEach(line=>{
+      const mat = rawMaterials.find(m=>m.id===line.materialId);
+      if (!mat) return;
+      const needed = line.qty * wo.qty;
+      if (mat.stock < needed) {
+        const prev = urgentMap[line.materialId]?.needed||0;
+        urgentMap[line.materialId] = { needed:prev+needed, mat, short:(prev+needed)-mat.stock };
+      }
+    });
+  });
+  const urgentMats = Object.values(urgentMap);
+
+  // Group urgent by last vendor (from PO history)
+  const vendorForMat = (matId) => {
+    const pos = purchaseOrders.filter(p=>p.materialId===matId||(p.lines||[]).find(l=>l.materialId===matId));
+    if (!pos.length) return null;
+    pos.sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
+    return pos[0].supplierName||pos[0].supplierId||null;
+  };
+
+  // Group urgent materials by suggested vendor
+  const urgentByVendor = {};
+  urgentMats.forEach(u=>{
+    const vnd = vendorForMat(u.mat.id)||"Unknown / No Vendor";
+    if (!urgentByVendor[vnd]) urgentByVendor[vnd] = [];
+    urgentByVendor[vnd].push(u);
+  });
+
+  const openPOWithItems = (items, vendorName) => {
+    setPreloadLines(items.map(u=>({mat:u.mat, qty:Math.ceil(u.short), unitPrice:u.mat.cost||0})));
+    setShowAdd(true);
+  };
 
   return (
     <div style={{ animation:"slide-in .3s ease" }}>
       <PageHeader title="Procurement"
-        subtitle={`${purchaseOrders.length} purchase orders · ${critMats.length} materials need restocking`}
-        actions={<Btn icon="+" onClick={()=>setShowAdd(true)}>New PO</Btn>}
+        subtitle={`${purchaseOrders.length} purchase orders · ${urgentMats.length} production-urgent materials`}
+        actions={<Btn icon="+" onClick={()=>{setPreloadLines([]);setShowAdd(true);}}>New PO</Btn>}
       />
 
-      {critMats.length>0 && (
-        <Alert type="warning" style={{marginBottom:16}}>
-          {critMats.length} material{critMats.length>1?"s":""} at or below minimum stock level — consider raising POs
-        </Alert>
-      )}
-
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:20 }}>
-        <Card pad={false}>
-          <div style={{ padding:"14px 20px", borderBottom:`1px solid ${C.border}`, fontSize:14, fontWeight:600 }}>
-            Purchase Orders
+      {/* ── URGENT MATERIALS PANEL ── */}
+      {urgentMats.length > 0 && (
+        <div style={{background:"#fff5f5",border:"2px solid #fc8181",borderRadius:10,padding:18,marginBottom:20}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <span style={{fontSize:22}}>🔴</span>
+              <div>
+                <div style={{fontSize:14,fontWeight:700,color:"#c53030"}}>
+                  {urgentMats.length} Material{urgentMats.length>1?"s":""} Urgently Required for Production
+                </div>
+                <div style={{fontSize:12,color:"#742a2a"}}>Grouped by last vendor — click to auto-fill a PO</div>
+              </div>
+            </div>
           </div>
-          <Table heads={["PO","Supplier","Material","Qty","Total","ETA","Status","Action"]}>
-            {purchaseOrders.map(po => {
-              const m = rawMaterials.find(r=>r.id===po.materialId);
-              const s = suppliers?.find(s=>s.id===po.supplierId);
-              return (
-                <TR key={po.id} cells={[
-                  <span style={{fontFamily:"monospace",fontSize:11}}>{po.id}</span>,
-                  <span style={{fontSize:12}}>{s?.name||po.supplierId||"—"}</span>,
-                  <span style={{fontSize:11,color:C.textMid,maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block"}}>
-                    {m?.name||po.materialId||"—"}
-                  </span>,
-                  <span style={{fontSize:12}}>{po.qty}</span>,
-                  <span style={{fontWeight:600,color:C.primary}}>{fmt$(po.total)}</span>,
-                  <span style={{fontSize:11,color:C.textMid}}>{fmtDt(po.etaDate)}</span>,
-                  <Badge label={po.status}/>,
-                  <Sel value={po.status} onChange={e=>dispatch({type:"ADD_PO",payload:{...po,status:e.target.value}})}
-                    style={{width:100,padding:"3px 6px",fontSize:11}}>
-                    {statusOptions.map(s=><option key={s}>{s}</option>)}
-                  </Sel>
-                ]}/>
-              );
-            })}
-          </Table>
-        </Card>
 
-        <Card style={{ padding:20 }}>
-          <div style={{ fontSize:14, fontWeight:600, color:C.text, marginBottom:12 }}>Critical Stock — Needs Restocking</div>
-          {critMats.length===0
-            ? <Alert type="success">All materials are adequately stocked</Alert>
-            : <div style={{ maxHeight:400, overflowY:"auto" }}>
-                {critMats.map(m=>(
-                  <div key={m.id} style={{ padding:"10px 12px", background:"#fafafa",
-                    borderRadius:6, marginBottom:8, border:`1px solid ${C.border}`,
-                    display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                    <div>
-                      <div style={{ fontSize:12, fontWeight:500, color:C.text,
-                        maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                        {m.name}
-                      </div>
-                      <div style={{ fontSize:11, color:C.textMid, marginTop:2 }}>
-                        {m.internalRef} · {m.stock}/{m.minStock} {m.unit}
-                      </div>
-                    </div>
-                    <Btn size="sm" onClick={()=>setForm({...form,materialId:m.id})&&setShowAdd(true)}>Order</Btn>
+          {Object.entries(urgentByVendor).map(([vendorName, items])=>(
+            <div key={vendorName} style={{background:"#fff",border:"1px solid #fc8181",borderRadius:8,
+              padding:14,marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:16}}>🤝</span>
+                  <span style={{fontSize:13,fontWeight:600,color:C.text}}>
+                    {vendorName==="Unknown / No Vendor"?"No previous vendor — manual entry needed":vendorName}
+                  </span>
+                  <span style={{fontSize:11,color:C.textMid}}>— {items.length} item{items.length>1?"s":""}</span>
+                </div>
+                <Btn small onClick={()=>openPOWithItems(items, vendorName)} icon="🛒">
+                  Create PO for {items.length} item{items.length>1?"s":""}
+                </Btn>
+              </div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                {items.map(u=>(
+                  <div key={u.mat.id} style={{background:"#fff5f5",border:"1px solid #fc8181",
+                    borderRadius:6,padding:"6px 10px",fontSize:11}}>
+                    <div style={{fontFamily:"monospace",color:"#742a2a",fontWeight:600}}>{u.mat.internalRef}</div>
+                    <div style={{color:C.text,marginTop:1}}>{u.mat.name.slice(0,40)}</div>
+                    <div style={{color:"#c53030",marginTop:1}}>Need {u.needed} · Have {u.mat.stock} · Short {u.short}</div>
                   </div>
                 ))}
               </div>
-          }
-        </Card>
-      </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── PO TABLE ── */}
+      <Card pad={false} style={{marginBottom:16}}>
+        <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,fontSize:14,fontWeight:600}}>
+          Purchase Orders ({purchaseOrders.length})
+        </div>
+        {purchaseOrders.length===0
+          ? <div style={{padding:30,textAlign:"center",color:C.textMid}}>No purchase orders yet. Click "New PO" to create one.</div>
+          : <Table heads={["PO ID","Subject","Supplier","Items","Total","ETA","Status","Action"]}>
+              {purchaseOrders.map(po=>{
+                const lineCount = po.lines?.length || (po.materialId?1:0);
+                const matName = po.lines?.[0]?.materialName || rawMaterials.find(r=>r.id===po.materialId)?.name || "—";
+                return (
+                  <TR key={po.id} cells={[
+                    <span style={{fontFamily:"monospace",fontSize:11,color:C.primary,fontWeight:500}}>{po.id}</span>,
+                    <span style={{fontSize:11,color:C.textMid,maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"block"}}>{po.subject||"—"}</span>,
+                    <span style={{fontSize:12,fontWeight:500}}>{po.supplierName||po.supplierId||"—"}</span>,
+                    <div>
+                      <div style={{fontSize:12}}>{matName.slice(0,40)}{matName.length>40?"…":""}</div>
+                      {lineCount>1&&<div style={{fontSize:10,color:C.textMid}}>{lineCount} items</div>}
+                    </div>,
+                    <span style={{fontWeight:600,color:C.primary}}>{fmt$(po.total)}</span>,
+                    <span style={{fontSize:11,color:C.textMid}}>{fmtDt(po.etaDate)}</span>,
+                    <Badge label={po.status}/>,
+                    <Sel value={po.status} onChange={e=>dispatch({type:"ADD_PO",payload:{...po,status:e.target.value}})}
+                      style={{width:110,padding:"3px 6px",fontSize:11}}>
+                      {statusOptions.map(s=><option key={s}>{s}</option>)}
+                    </Sel>
+                  ]}/>
+                );
+              })}
+            </Table>
+        }
+      </Card>
 
       {showAdd && (
         <ProcurementModal
           rawMaterials={rawMaterials}
-          suppliers={suppliers||[]}
-          onClose={()=>setShowAdd(false)}
-          onSave={po=>{ dispatch({type:"ADD_PO",payload:po}); setShowAdd(false); }}
+          suppliers={[...vendors, ...(S.suppliers||[])]}
+          preloadLines={preloadLines}
+          onClose={()=>{setShowAdd(false);setPreloadLines([]);}}
+          onSave={po=>{ dispatch({type:"ADD_PO",payload:po}); setShowAdd(false); setPreloadLines([]); }}
         />
       )}
+    </div>
+  );
     </div>
   );
 };
@@ -5324,11 +5604,41 @@ const NAV = [
 // MAIN APP
 // ════════════════════════════════════════════════════════════════════════════
 export default function App() {
-  const [S, dispatch] = useReducer(appReducer, SEED);
-  const [active, setActive] = useState("dash");
+  // ── Persistent state via localStorage ──────────────────────────────────
+  const loadState = () => {
+    try {
+      const saved = localStorage.getItem("shibli_erp_state");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Merge with SEED to ensure new fields added in updates are present
+        return { ...SEED, ...parsed,
+          rawMaterials: parsed.rawMaterials || SEED.rawMaterials,
+          finishedGoods: parsed.finishedGoods || SEED.finishedGoods,
+          bom: { ...SEED.bom, ...(parsed.bom||{}) },
+          suppliers: parsed.suppliers || SEED.suppliers,
+        };
+      }
+    } catch(e) { console.warn("Could not load saved state:", e); }
+    return SEED;
+  };
+
+  const [S, dispatch] = useReducer(appReducer, undefined, loadState);
+  const [active, setActive] = useState(()=>{ try{ return localStorage.getItem("shibli_active")||"dash"; }catch(e){return "dash";} });
   const [clock, setClock] = useState(new Date());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
+
+  // Save state to localStorage on every change
+  useEffect(()=>{
+    try { localStorage.setItem("shibli_erp_state", JSON.stringify(S)); }
+    catch(e) { console.warn("Could not save state:", e); }
+  }, [S]);
+
+  // Save active tab
+  useEffect(()=>{
+    try { localStorage.setItem("shibli_active", active); }
+    catch(e) {}
+  }, [active]);
 
   useEffect(()=>{ const t=setInterval(()=>setClock(new Date()),1000); return ()=>clearInterval(t); },[]);
 
