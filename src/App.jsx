@@ -3152,129 +3152,91 @@ const Inventory = ({ S, dispatch }) => {
 };
 
 // ════════════════════════════════════════════════════════════════════════════
-// SALES ORDER FORM MODAL (outside to prevent re-mount)
+// SALES ORDER FORM MODAL — multi-product lines
 // ════════════════════════════════════════════════════════════════════════════
 const SOFormModal = ({ initial, finishedGoods, onSave, onClose }) => {
   const isEdit = !!initial?.id;
-  const blank = { customer:"", subject:"", fgId:"", qty:1, dueDate:"", priority:"NORMAL", notes:"", unitPrice:"" };
-  const [form, setForm] = useState(isEdit ? {...initial, unitPrice:initial.unitPrice||initial.total/initial.qty||0} : blank);
-  const [fgSearch, setFgSearch]   = useState(isEdit ? (finishedGoods.find(f=>f.id===initial.fgId)?.name||"") : "");
-  const [showFgDrop, setShowFgDrop] = useState(false);
-  const [fgSel, setFgSel]         = useState(isEdit ? finishedGoods.find(f=>f.id===initial.fgId)||null : null);
-  const set = k => e => setForm(p=>({...p,[k]:e.target.value}));
-
-  const filteredFG = finishedGoods.filter(f=>
-    !fgSearch || f.id.toLowerCase().includes(fgSearch.toLowerCase()) ||
-    f.name.toLowerCase().includes(fgSearch.toLowerCase()) ||
-    f.category?.toLowerCase().includes(fgSearch.toLowerCase())
-  ).slice(0,12);
-
-  const selectFG = f => { setFgSel(f); setFgSearch(f.name); setForm(p=>({...p,fgId:f.id,unitPrice:f.basePrice||0})); setShowFgDrop(false); };
-
-  const unitPrice = parseFloat(form.unitPrice)||fgSel?.basePrice||0;
-  const qty       = parseInt(form.qty)||1;
-  const total     = unitPrice * qty;
-
   const inp = {width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,
     outline:"none",boxSizing:"border-box",background:"#fff",color:"#212529"};
 
+  // Header fields
+  const [customer, setCustomer] = useState(initial?.customer||"");
+  const [subject,  setSubject]  = useState(initial?.subject||"");
+  const [dueDate,  setDueDate]  = useState(initial?.dueDate||"");
+  const [priority, setPriority] = useState(initial?.priority||"NORMAL");
+  const [status,   setStatus]   = useState(initial?.status||"Quote");
+  const [notes,    setNotes]    = useState(initial?.notes||"");
+
+  // Line items — [{fgId, fgName, qty, unitPrice}]
+  const initLines = () => {
+    if (isEdit && initial.lines?.length>0) return initial.lines;
+    if (isEdit && initial.fgId) return [{fgId:initial.fgId, fgName:finishedGoods.find(f=>f.id===initial.fgId)?.name||initial.fgId, qty:initial.qty||1, unitPrice:initial.unitPrice||0}];
+    return [];
+  };
+  const [lines,   setLines]     = useState(initLines);
+  const [fgSearch,setFgSearch]  = useState("");
+  const [showFgDrop,setShowFgDrop]=useState(false);
+
+  const filteredFG = finishedGoods.filter(f=>
+    !lines.find(l=>l.fgId===f.id) && (
+      !fgSearch || f.id.toLowerCase().includes(fgSearch.toLowerCase()) ||
+      f.name.toLowerCase().includes(fgSearch.toLowerCase()) ||
+      (f.category||"").toLowerCase().includes(fgSearch.toLowerCase())
+    )
+  ).slice(0,12);
+
+  const addLine = f => {
+    setLines(p=>[...p,{fgId:f.id,fgName:f.name,qty:1,unitPrice:f.basePrice||0}]);
+    setFgSearch(""); setShowFgDrop(false);
+  };
+  const removeLine = id => setLines(p=>p.filter(l=>l.fgId!==id));
+  const setLineQty = (id,v) => setLines(p=>p.map(l=>l.fgId===id?{...l,qty:parseInt(v)||1}:l));
+  const setLinePrice = (id,v) => setLines(p=>p.map(l=>l.fgId===id?{...l,unitPrice:parseFloat(v)||0}:l));
+
+  const grandTotal = lines.reduce((s,l)=>s+l.qty*l.unitPrice,0);
+
   const handleSave = () => {
-    if (!form.customer||!fgSel) return;
+    if (!customer||lines.length===0) return;
+    const today = new Date().toISOString().split("T")[0];
     onSave({
-      ...(isEdit?initial:{}), ...form,
-      fgId:fgSel.id, qty, unitPrice, total,
-      ...(isEdit?{}:{id:genId("SO"), date:new Date().toISOString().split("T")[0], status:"Quote"})
+      ...(isEdit?initial:{}),
+      customer, subject, dueDate, priority, notes, lines,
+      // backward-compat single fields from first line
+      fgId:lines[0]?.fgId||"", qty:lines[0]?.qty||1,
+      unitPrice:lines[0]?.unitPrice||0,
+      total:grandTotal,
+      ...(isEdit?{status}:{id:genId("SO"), date:today, status:"Quote"})
     });
     onClose();
   };
 
+  const statusOptions = ["Quote","Pending","Picking","In Production","Shipped","Delivered","Cancelled"];
+
   return (
-    <Modal title={isEdit?"Edit Sales Order":"New Sales Order"} onClose={onClose} width={580}>
+    <Modal title={isEdit?"Edit Sales Order":"New Sales Order"} onClose={onClose} width={680}>
       <div style={{display:"flex",flexDirection:"column",gap:14}}>
+        {/* Header row */}
         <div style={{display:"flex",gap:12}}>
           <div style={{flex:1}}>
             <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Customer Name *</div>
-            <input value={form.customer} onChange={set("customer")} placeholder="e.g. Meridian Defence" style={inp}
+            <input value={customer} onChange={e=>setCustomer(e.target.value)} placeholder="e.g. Meridian Defence" style={inp}
               onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
           </div>
           <div style={{flex:1}}>
             <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>SO Subject / Reference</div>
-            <input value={form.subject||""} onChange={set("subject")} placeholder="e.g. Q1 2025 order, Tactical kit batch" style={inp}
+            <input value={subject} onChange={e=>setSubject(e.target.value)} placeholder="e.g. Q1 2025 tactical batch" style={inp}
               onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
           </div>
         </div>
-
-        {/* Product searchable */}
-        <div>
-          <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Product *</div>
-          <div style={{position:"relative"}}>
-            <input value={fgSearch}
-              onChange={e=>{setFgSearch(e.target.value);setFgSel(null);setForm(p=>({...p,fgId:""}));setShowFgDrop(true);}}
-              onFocus={()=>setShowFgDrop(true)} onBlur={()=>setTimeout(()=>setShowFgDrop(false),150)}
-              placeholder="Search by product name, ID or category..."
-              style={{...inp,paddingLeft:34}}
-              onFocusCapture={e=>e.target.style.borderColor=C.primary}/>
-            <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:C.textDim,fontSize:14}}>🔍</span>
-            {showFgDrop && (
-              <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:200,background:"#fff",
-                border:`1px solid ${C.primary}`,borderRadius:6,boxShadow:"0 4px 16px rgba(0,0,0,.12)",maxHeight:240,overflowY:"auto"}}>
-                {filteredFG.length===0
-                  ? <div style={{padding:"12px",color:C.textMid,fontSize:13}}>No products found{fgSearch?` for "${fgSearch}"`:""}. Add products in the BOM & Products module.</div>
-                  : filteredFG.map(f=>(
-                    <div key={f.id} onMouseDown={()=>selectFG(f)}
-                      style={{padding:"10px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,
-                        background:fgSel?.id===f.id?C.primaryLight:"transparent"}}
-                      onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
-                      onMouseLeave={e=>e.currentTarget.style.background=fgSel?.id===f.id?C.primaryLight:"transparent"}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                        <div>
-                          <span style={{fontFamily:"monospace",fontSize:10,color:C.textMid}}>{f.id}</span>
-                          <span style={{fontSize:13,fontWeight:500,color:C.text,marginLeft:8}}>{f.name}</span>
-                        </div>
-                        <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                          <span style={{fontSize:11,color:C.textMid}}>{f.category}</span>
-                          <span style={{fontSize:12,fontWeight:600,color:C.success}}>{fmt$(f.basePrice)}</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                }
-              </div>
-            )}
-          </div>
-          {fgSel && (
-            <div style={{marginTop:6,background:C.primaryLight,border:`1px solid ${C.border}`,
-              borderRadius:6,padding:"8px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <span style={{fontSize:12,fontWeight:500,color:C.primary}}>{fgSel.name}</span>
-              <span style={{fontSize:11,color:C.textMid}}>{fgSel.category} · Base price: {fmt$(fgSel.basePrice)}</span>
-              <button onMouseDown={()=>{setFgSel(null);setFgSearch("");setForm(p=>({...p,fgId:"",unitPrice:""}));}}
-                style={{background:"none",border:"none",cursor:"pointer",color:C.textMid,fontSize:14}}>✕</button>
-            </div>
-          )}
-        </div>
-
         <div style={{display:"flex",gap:12}}>
-          <div style={{flex:1}}>
-            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Quantity *</div>
-            <input type="number" min={1} value={form.qty} onChange={set("qty")} style={inp}
-              onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
-          </div>
-          <div style={{flex:1}}>
-            <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Unit Price (PKR)</div>
-            <input type="number" min={0} value={form.unitPrice} onChange={set("unitPrice")} style={inp}
-              onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
-          </div>
           <div style={{flex:1}}>
             <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Due Date</div>
-            <input type="date" value={form.dueDate} onChange={set("dueDate")} style={inp}
+            <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} style={inp}
               onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
           </div>
-        </div>
-
-        <div style={{display:"flex",gap:12}}>
           <div style={{flex:1}}>
             <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Priority</div>
-            <select value={form.priority} onChange={set("priority")} style={inp}>
+            <select value={priority} onChange={e=>setPriority(e.target.value)} style={inp}>
               <option value="NORMAL">Normal</option>
               <option value="HIGH">High Priority</option>
             </select>
@@ -3282,31 +3244,107 @@ const SOFormModal = ({ initial, finishedGoods, onSave, onClose }) => {
           {isEdit && (
             <div style={{flex:1}}>
               <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Status</div>
-              <select value={form.status} onChange={set("status")} style={inp}>
-                {["Quote","Pending","Picking","In Production","Shipped","Delivered","Cancelled"].map(s=><option key={s}>{s}</option>)}
+              <select value={status} onChange={e=>setStatus(e.target.value)} style={inp}>
+                {statusOptions.map(s=><option key={s}>{s}</option>)}
               </select>
             </div>
           )}
         </div>
 
+        {/* Product search */}
         <div>
-          <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Notes</div>
-          <input value={form.notes} onChange={set("notes")} placeholder="Special requirements, delivery instructions..." style={inp}
-            onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+          <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Add Products *</div>
+          <div style={{position:"relative"}}>
+            <input value={fgSearch}
+              onChange={e=>{setFgSearch(e.target.value);setShowFgDrop(true);}}
+              onFocus={()=>setShowFgDrop(true)} onBlur={()=>setTimeout(()=>setShowFgDrop(false),150)}
+              placeholder="Search products by name, ID or category to add..."
+              style={{...inp,paddingLeft:34}} onFocusCapture={e=>e.target.style.borderColor=C.primary}/>
+            <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:C.textDim,fontSize:14}}>🔍</span>
+            {showFgDrop&&fgSearch&&(
+              <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:200,background:"#fff",
+                border:`1px solid ${C.primary}`,borderRadius:6,boxShadow:"0 4px 16px rgba(0,0,0,.12)",maxHeight:220,overflowY:"auto"}}>
+                {filteredFG.length===0
+                  ? <div style={{padding:"12px",color:C.textMid,fontSize:13}}>No products found for "{fgSearch}"</div>
+                  : filteredFG.map(f=>(
+                    <div key={f.id} onMouseDown={()=>addLine(f)}
+                      style={{padding:"10px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,
+                        display:"flex",justifyContent:"space-between",alignItems:"center"}}
+                      onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+                      onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                      <div>
+                        <span style={{fontFamily:"monospace",fontSize:10,color:C.textMid}}>{f.id}</span>
+                        <span style={{fontSize:13,fontWeight:500,color:C.text,marginLeft:8}}>{f.name}</span>
+                      </div>
+                      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                        <span style={{fontSize:11,color:C.textMid}}>{f.category}</span>
+                        <span style={{fontSize:12,fontWeight:600,color:C.success}}>{fmt$(f.basePrice)}</span>
+                        <span style={{fontSize:11,color:C.primary,fontWeight:600}}>+ Add</span>
+                      </div>
+                    </div>
+                  ))
+                }
+              </div>
+            )}
+          </div>
         </div>
 
-        {fgSel && qty>0 && (
-          <div style={{background:"#f0fff4",border:"1px solid #c6f6d5",borderRadius:6,padding:"10px 14px",
-            display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <span style={{fontSize:13,color:C.textMid}}>{qty} × {fgSel.name}</span>
-            <span style={{fontSize:15,fontWeight:700,color:C.success}}>Total: {fmt$(total)}</span>
+        {/* Lines table */}
+        {lines.length>0 ? (
+          <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+            <table style={{width:"100%",borderCollapse:"collapse"}}>
+              <thead>
+                <tr style={{background:"#f9fafb",borderBottom:`1px solid ${C.border}`}}>
+                  {["Product ID","Product Name","Qty","Unit Price (PKR)","Line Total",""].map(h=>(
+                    <th key={h} style={{padding:"8px 12px",textAlign:"left",fontSize:11,fontWeight:600,color:C.textMid,textTransform:"uppercase"}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map(l=>(
+                  <tr key={l.fgId} style={{borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"8px 12px",fontFamily:"monospace",fontSize:11,color:C.textMid}}>{l.fgId}</td>
+                    <td style={{padding:"8px 12px",fontSize:12,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l.fgName}</td>
+                    <td style={{padding:"8px 12px",width:80}}>
+                      <input type="number" min={1} value={l.qty} onChange={e=>setLineQty(l.fgId,e.target.value)}
+                        style={{width:"100%",padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:4,fontSize:12,background:"#fff",color:"#212529",outline:"none"}}/>
+                    </td>
+                    <td style={{padding:"8px 12px",width:130}}>
+                      <input type="number" min={0} step="0.01" value={l.unitPrice} onChange={e=>setLinePrice(l.fgId,e.target.value)}
+                        style={{width:"100%",padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:4,fontSize:12,background:"#fff",color:"#212529",outline:"none"}}/>
+                    </td>
+                    <td style={{padding:"8px 12px",fontFamily:"monospace",fontSize:12,fontWeight:600,color:C.primary}}>{fmt$(l.qty*l.unitPrice)}</td>
+                    <td style={{padding:"8px 12px"}}>
+                      <button onClick={()=>removeLine(l.fgId)}
+                        style={{background:"none",border:"none",cursor:"pointer",color:C.danger,fontSize:16}}>✕</button>
+                    </td>
+                  </tr>
+                ))}
+                <tr style={{background:"#f9fafb",borderTop:`2px solid ${C.border}`}}>
+                  <td colSpan={4} style={{padding:"10px 12px",fontSize:13,fontWeight:600,textAlign:"right",color:C.text}}>Grand Total:</td>
+                  <td style={{padding:"10px 12px",fontFamily:"monospace",fontSize:14,fontWeight:700,color:C.primary}}>{fmt$(grandTotal)}</td>
+                  <td/>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div style={{background:"#f9fafb",border:`1px dashed ${C.border}`,borderRadius:8,
+            padding:"20px",textAlign:"center",color:C.textDim,fontSize:13}}>
+            Search and add products above to build your order
           </div>
         )}
 
+        <div>
+          <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Notes</div>
+          <input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Special requirements, delivery instructions..." style={inp}
+            onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+        </div>
+
         <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
           <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
-          <Btn onClick={handleSave} disabled={!form.customer||!fgSel}>
-            {isEdit?"Save Changes":"Create Order"}
+          <Btn onClick={handleSave} disabled={!customer||lines.length===0}>
+            {isEdit?"Save Changes":`Create Order (${lines.length} product${lines.length>1?"s":""})`}
           </Btn>
         </div>
       </div>
@@ -3998,7 +4036,7 @@ const USERS = [
     access:["dash","analysis","inv","sales"] },
 ];
 
-const LoginPage = ({ onLogin }) => {
+const LoginPage = ({ onLogin, getPassword, darkMode }) => {
   const [selected, setSelected] = useState(null);
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
@@ -4015,7 +4053,7 @@ const LoginPage = ({ onLogin }) => {
   const handleLogin = () => {
     if (!selected) { setError("Please select a user."); return; }
     if (!password) { setError("Please enter your password."); return; }
-    if (password !== selected.password) { setError("Incorrect password. Please try again."); setPassword(""); return; }
+    if (password !== (getPassword?.(selected.id)||selected.password)) { setError("Incorrect password. Please try again."); setPassword(""); return; }
     setError("");
     onLogin(selected);
   };
@@ -4135,7 +4173,7 @@ const LOCATIONS = [
 // MODULE: STOCK TRANSFERS
 // ════════════════════════════════════════════════════════════════════════════
 const StockTransfers = ({ S, dispatch, currentUser }) => {
-  const { rawMaterials, finishedGoods, transfers=[], locationStocks={} } = S;
+  const { rawMaterials, finishedGoods, transfers=[], locationStocks={}, bom={} } = S;
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState({ fromLoc:"warehouse", toLoc:"production_store", qty:1, notes:"" });
   const [itemSearch, setItemSearch] = useState("");
@@ -4215,10 +4253,10 @@ const StockTransfers = ({ S, dispatch, currentUser }) => {
       </Card>
 
       {showNew && (
-        <Modal title="New Stock Transfer" onClose={()=>setShowNew(false)} width={680}>
+        <Modal title="New Stock Transfer" onClose={()=>setShowNew(false)} width={720}>
           <TransferModal
             rawMaterials={rawMaterials} finishedGoods={finishedGoods}
-            currentUser={currentUser} dispatch={dispatch}
+            currentUser={currentUser} dispatch={dispatch} bom={bom}
             onClose={()=>setShowNew(false)}
           />
         </Modal>
@@ -5034,7 +5072,7 @@ const GRNModal = ({ rawMaterials, purchaseOrders, currentUser, dispatch, onClose
           <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Linked PO (auto-fills items)</div>
           <select value={poId} onChange={e=>handlePoSelect(e.target.value)} style={inp}>
             <option value="">— No PO linked —</option>
-            {purchaseOrders.filter(p=>!["Received","Cancelled"].includes(p.status)).map(po=>(
+            {purchaseOrders.filter(p=>p.status!=="Received"&&p.status!=="Cancelled").map(po=>(
               <option key={po.id} value={po.id}>{po.id} {po.subject?`· ${po.subject}`:""} · {po.supplierName||"—"}</option>
             ))}
           </select>
@@ -5557,13 +5595,19 @@ const LocationsModule = ({ S }) => {
 // ════════════════════════════════════════════════════════════════════════════
 // TRANSFER MODAL — multi-item, light theme, searchable
 // ════════════════════════════════════════════════════════════════════════════
-const TransferModal = ({ rawMaterials, finishedGoods, currentUser, dispatch, onClose }) => {
+const TransferModal = ({ rawMaterials, finishedGoods, currentUser, dispatch, onClose, bom={}  }) => {
   const [fromLoc, setFromLoc] = useState("warehouse");
   const [toLoc,   setToLoc]   = useState("production_store");
   const [notes,   setNotes]   = useState("");
-  const [lines,   setLines]   = useState([]); // [{item, qty}]
+  const [lines,   setLines]   = useState([]);
   const [search,  setSearch]  = useState("");
   const [showDrop,setShowDrop]= useState(false);
+  // BOM-based selection
+  const [bomFgSearch, setBomFgSearch] = useState("");
+  const [showBomDrop, setShowBomDrop] = useState(false);
+  const [bomFgSel,    setBomFgSel]    = useState(null);
+  const [bomQty,      setBomQty]      = useState(1);
+  const [bomWarning,  setBomWarning]  = useState([]); // items not available
 
   const allItems = [
     ...rawMaterials.map(m=>({...m, type:"RM", label:`[RM] ${m.internalRef} — ${m.name}`})),
@@ -5574,6 +5618,42 @@ const TransferModal = ({ rawMaterials, finishedGoods, currentUser, dispatch, onC
     .filter(i=>!search||i.label.toLowerCase().includes(search.toLowerCase())||
                (i.category||"").toLowerCase().includes(search.toLowerCase()))
     .slice(0,15);
+
+  const filteredBomFG = finishedGoods.filter(f=>
+    !bomFgSearch||f.name.toLowerCase().includes(bomFgSearch.toLowerCase())||f.id.toLowerCase().includes(bomFgSearch.toLowerCase())
+  ).slice(0,10);
+
+  // Load BOM materials for a finished good at a given qty
+  const loadBomLines = (fg, qty) => {
+    const bomLines = bom[fg.id]||[];
+    if (bomLines.length===0) return { added:[], missing:[] };
+    const added=[], missing=[];
+    bomLines.forEach(line=>{
+      const mat = rawMaterials.find(m=>m.id===line.materialId);
+      if (!mat) return;
+      const need = line.qty * qty;
+      // Add to lines (will show warning if short)
+      added.push({item:{...mat,type:"RM",label:`[RM] ${mat.internalRef} — ${mat.name}`}, qty:need});
+      if (mat.stock < need) missing.push({mat, need, have:mat.stock, short:need-mat.stock});
+    });
+    return {added, missing};
+  };
+
+  const applyBomTransfer = () => {
+    if (!bomFgSel) return;
+    const qty = parseInt(bomQty)||1;
+    const {added, missing} = loadBomLines(bomFgSel, qty);
+    // Merge with existing lines (update qty if already present)
+    const newLines = [...lines];
+    added.forEach(a=>{
+      const existing = newLines.find(l=>l.item.id===a.item.id);
+      if (existing) existing.qty = a.qty;
+      else newLines.push(a);
+    });
+    setLines(newLines);
+    setBomWarning(missing);
+    setBomFgSel(null); setBomFgSearch(""); setBomQty(1);
+  };
 
   const addLine = i => { setLines(p=>[...p,{item:i,qty:1}]); setSearch(""); setShowDrop(false); };
   const removeLine = id => setLines(p=>p.filter(l=>l.item.id!==id));
@@ -5617,21 +5697,80 @@ const TransferModal = ({ rawMaterials, finishedGoods, currentUser, dispatch, onC
           </select>
         </div>
       </div>
-      {fromLoc===toLoc&&<div style={{color:C.danger,fontSize:12}}>⚠ From and To must be different locations.</div>}
+      {fromLoc===toLoc && <div style={{color:C.danger,fontSize:12}}>⚠ From and To must be different locations.</div>}
 
-      {/* Search + add */}
+      {/* BOM-based auto-fill */}
+      <div style={{background:"#f0f7ff",border:`1px solid #93c5fd`,borderRadius:8,padding:14}}>
+        <div style={{fontSize:12,fontWeight:600,color:"#1e40af",marginBottom:10}}>
+          🔩 Auto-fill from Product BOM (optional)
+        </div>
+        <div style={{display:"flex",gap:10,alignItems:"flex-end"}}>
+          <div style={{flex:2,position:"relative"}}>
+            <div style={{fontSize:11,fontWeight:500,color:C.textMid,marginBottom:4}}>Select Finished Good</div>
+            <input value={bomFgSel?bomFgSel.name:bomFgSearch}
+              onChange={e=>{setBomFgSearch(e.target.value);setBomFgSel(null);setShowBomDrop(true);}}
+              onFocus={()=>setShowBomDrop(true)} onBlur={()=>setTimeout(()=>setShowBomDrop(false),150)}
+              placeholder="e.g. SKUA LR — auto-adds all BOM materials..."
+              style={inp} onFocusCapture={e=>e.target.style.borderColor="#3b82f6"}/>
+            {showBomDrop&&bomFgSearch&&(
+              <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:300,background:"#fff",
+                border:`1px solid #3b82f6`,borderRadius:6,boxShadow:"0 4px 16px rgba(0,0,0,.12)",maxHeight:180,overflowY:"auto"}}>
+                {filteredBomFG.length===0
+                  ? <div style={{padding:"10px",color:C.textMid,fontSize:12}}>No products found</div>
+                  : filteredBomFG.map(f=>(
+                    <div key={f.id} onMouseDown={()=>{setBomFgSel(f);setBomFgSearch(f.name);setShowBomDrop(false);}}
+                      style={{padding:"9px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,fontSize:12}}
+                      onMouseEnter={e=>e.currentTarget.style.background="#eff6ff"}
+                      onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                      <span style={{fontFamily:"monospace",fontSize:10,color:C.textMid}}>{f.id}</span>
+                      <span style={{marginLeft:8,fontWeight:500}}>{f.name}</span>
+                      <span style={{marginLeft:8,fontSize:10,color:C.textMid}}>({(bom[f.id]||[]).length} BOM lines)</span>
+                    </div>
+                  ))
+                }
+              </div>
+            )}
+          </div>
+          <div style={{flex:"0 0 80px"}}>
+            <div style={{fontSize:11,fontWeight:500,color:C.textMid,marginBottom:4}}>Qty</div>
+            <input type="number" min={1} value={bomQty} onChange={e=>setBomQty(e.target.value)} style={inp}/>
+          </div>
+          <Btn onClick={applyBomTransfer} disabled={!bomFgSel} small>Auto-fill BOM</Btn>
+        </div>
+        {bomFgSel && (bom[bomFgSel.id]||[]).length===0 && (
+          <div style={{marginTop:8,fontSize:11,color:"#92400e"}}>⚠ No BOM defined for {bomFgSel.name}. Add components in Products & BOMs first.</div>
+        )}
+      </div>
+
+      {/* BOM shortage warning */}
+      {bomWarning.length>0 && (
+        <div style={{background:"#fff5f5",border:"1px solid #fca5a5",borderRadius:8,padding:14}}>
+          <div style={{fontSize:13,fontWeight:600,color:C.danger,marginBottom:8}}>
+            ⚠ {bomWarning.length} material{bomWarning.length>1?"s are":" is"} short — transfer what's available?
+          </div>
+          {bomWarning.map(w=>(
+            <div key={w.mat.id} style={{fontSize:12,color:"#7f1d1d",marginBottom:4}}>
+              <span style={{fontFamily:"monospace"}}>{w.mat.internalRef}</span> — Need {w.need}, Have {w.have}, Short <strong>{w.short}</strong>
+            </div>
+          ))}
+          <div style={{marginTop:10,fontSize:12,color:C.textMid}}>
+            The lines are already added with the required quantities. Adjust them down to available amounts or proceed as-is.
+          </div>
+        </div>
+      )}
+
+      {/* Manual search + add */}
       <div>
-        <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Add Items to Transfer *</div>
+        <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Add Individual Items</div>
         <div style={{position:"relative"}}>
           <input value={search} onChange={e=>{setSearch(e.target.value);setShowDrop(true);}}
             onFocus={()=>setShowDrop(true)} onBlur={()=>setTimeout(()=>setShowDrop(false),150)}
             placeholder="Search materials or finished goods by ref, name or category..."
-            style={{...inp,paddingLeft:34}}
-            onFocusCapture={e=>e.target.style.borderColor=C.primary}/>
+            style={{...inp,paddingLeft:34}} onFocusCapture={e=>e.target.style.borderColor=C.primary}/>
           <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:C.textDim,fontSize:14}}>🔍</span>
           {showDrop&&search&&(
             <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:200,background:"#fff",
-              border:`1px solid ${C.primary}`,borderRadius:6,boxShadow:"0 4px 16px rgba(0,0,0,.12)",maxHeight:220,overflowY:"auto"}}>
+              border:`1px solid ${C.primary}`,borderRadius:6,boxShadow:"0 4px 16px rgba(0,0,0,.12)",maxHeight:200,overflowY:"auto"}}>
               {filtered.length===0
                 ? <div style={{padding:"12px",color:C.textMid,fontSize:13}}>No items found for "{search}"</div>
                 : filtered.map(i=>(
@@ -5642,11 +5781,10 @@ const TransferModal = ({ rawMaterials, finishedGoods, currentUser, dispatch, onC
                     onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                     <div>
                       <span style={{fontFamily:"monospace",fontSize:10,color:C.textMid}}>{i.internalRef||i.id}</span>
-                      <span style={{fontSize:12,color:C.text,marginLeft:8}}>{i.name.slice(0,55)}</span>
+                      <span style={{fontSize:12,color:C.text,marginLeft:8}}>{i.name.slice(0,50)}</span>
                     </div>
                     <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
                       <Badge label={i.type}/>
-                      <span style={{fontSize:11,color:C.textMid}}>{i.category}</span>
                       <span style={{fontSize:11,color:C.primary,fontWeight:600}}>+ Add</span>
                     </div>
                   </div>
@@ -5656,66 +5794,6 @@ const TransferModal = ({ rawMaterials, finishedGoods, currentUser, dispatch, onC
           )}
         </div>
       </div>
-
-      {/* Lines table */}
-      {lines.length>0 ? (
-        <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
-          <table style={{width:"100%",borderCollapse:"collapse"}}>
-            <thead>
-              <tr style={{background:"#f9fafb",borderBottom:`1px solid ${C.border}`}}>
-                {["Type","Ref","Item Name","Qty",""].map(h=>(
-                  <th key={h} style={{padding:"8px 12px",textAlign:"left",fontSize:11,fontWeight:600,color:C.textMid,textTransform:"uppercase"}}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map(l=>(
-                <tr key={l.item.id} style={{borderBottom:`1px solid ${C.border}`}}>
-                  <td style={{padding:"8px 12px"}}><Badge label={l.item.type}/></td>
-                  <td style={{padding:"8px 12px",fontFamily:"monospace",fontSize:11,color:C.textMid}}>{l.item.internalRef||l.item.id}</td>
-                  <td style={{padding:"8px 12px",fontSize:12,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l.item.name}</td>
-                  <td style={{padding:"8px 12px",width:90}}>
-                    <input type="number" min={1} value={l.qty} onChange={e=>setQty(l.item.id,e.target.value)}
-                      style={{width:"100%",padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:4,
-                        fontSize:12,background:"#fff",color:"#212529",outline:"none"}}/>
-                  </td>
-                  <td style={{padding:"8px 12px"}}>
-                    <button onClick={()=>removeLine(l.item.id)}
-                      style={{background:"none",border:"none",cursor:"pointer",color:C.danger,fontSize:16}}>✕</button>
-                  </td>
-                </tr>
-              ))}
-              <tr style={{background:"#f9fafb",borderTop:`2px solid ${C.border}`}}>
-                <td colSpan={3} style={{padding:"8px 12px",fontSize:12,fontWeight:600,color:C.textMid}}>
-                  Total: {lines.length} item type{lines.length!==1?"s":""} · {lines.reduce((s,l)=>s+l.qty,0)} units
-                </td>
-                <td colSpan={2}/>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div style={{background:"#f9fafb",border:`1px dashed ${C.border}`,borderRadius:8,
-          padding:"20px",textAlign:"center",color:C.textDim,fontSize:13}}>
-          Search and add items above to transfer
-        </div>
-      )}
-
-      <div>
-        <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Notes</div>
-        <input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Reason for transfer, batch ref..."
-          style={inp} onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
-      </div>
-
-      <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-        <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
-        <Btn onClick={handleConfirm} disabled={lines.length===0||fromLoc===toLoc}>
-          Confirm Transfer ({lines.length} item{lines.length!==1?"s":""})
-        </Btn>
-      </div>
-    </div>
-  );
-};
 
 // ════════════════════════════════════════════════════════════════════════════
 // MODULE: MANUFACTURING ORDERS (MO)
@@ -6072,6 +6150,145 @@ const ManufacturingOrders = ({ S, dispatch, currentUser }) => {
   );
 };
 
+// ════════════════════════════════════════════════════════════════════════════
+// SETTINGS MODAL — password change + theme toggle
+// ════════════════════════════════════════════════════════════════════════════
+const SettingsModal = ({ currentUser, getPassword, savePassword, darkMode, setDarkMode, onClose }) => {
+  const [tab, setTab]           = useState("account");
+  const [oldPw, setOldPw]       = useState("");
+  const [newPw, setNewPw]       = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [showOld, setShowOld]   = useState(false);
+  const [showNew, setShowNew]   = useState(false);
+  const [msg, setMsg]           = useState(null); // {type, text}
+
+  const inp = {width:"100%",padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:6,
+    fontSize:13,outline:"none",background:"#fff",color:"#212529",boxSizing:"border-box"};
+
+  const handleChangePw = () => {
+    setMsg(null);
+    const current = getPassword(currentUser.id);
+    if (oldPw !== current) { setMsg({type:"error",text:"Current password is incorrect."}); return; }
+    if (newPw.length < 6)  { setMsg({type:"error",text:"New password must be at least 6 characters."}); return; }
+    if (newPw !== confirmPw){ setMsg({type:"error",text:"Passwords do not match."}); return; }
+    savePassword(currentUser.id, newPw);
+    setMsg({type:"success",text:"Password changed successfully!"});
+    setOldPw(""); setNewPw(""); setConfirmPw("");
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:2000,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:"#fff",borderRadius:12,width:"100%",maxWidth:480,
+        boxShadow:"0 20px 60px rgba(0,0,0,0.2)",animation:"slide-in .2s ease"}}>
+        {/* Header */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+          padding:"16px 20px",borderBottom:`1px solid ${C.border}`}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:36,height:36,borderRadius:"50%",background:currentUser.color,
+              display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:14,fontWeight:700}}>
+              {currentUser.avatar}
+            </div>
+            <div>
+              <div style={{fontSize:15,fontWeight:600,color:C.text}}>{currentUser.name}</div>
+              <div style={{fontSize:11,color:C.textMid}}>{currentUser.role}</div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",
+            color:C.textMid,fontSize:20,lineHeight:1,padding:"2px 6px"}}>✕</button>
+        </div>
+
+        {/* Tabs */}
+        <div style={{display:"flex",borderBottom:`1px solid ${C.border}`}}>
+          {[["account","👤 Account"],["appearance","🎨 Appearance"]].map(([id,label])=>(
+            <button key={id} onClick={()=>setTab(id)}
+              style={{flex:1,padding:"10px",border:"none",background:"transparent",fontSize:13,
+                cursor:"pointer",fontWeight:tab===id?600:400,color:tab===id?C.primary:C.textMid,
+                borderBottom:tab===id?`2px solid ${C.primary}`:"2px solid transparent",marginBottom:-1}}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{padding:20}}>
+          {tab==="account" && (
+            <div style={{display:"flex",flexDirection:"column",gap:14}}>
+              <div style={{fontSize:13,fontWeight:600,color:C.text,marginBottom:4}}>Change Password</div>
+              <div>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Current Password</div>
+                <div style={{position:"relative"}}>
+                  <input type={showOld?"text":"password"} value={oldPw} onChange={e=>setOldPw(e.target.value)}
+                    placeholder="Enter current password" style={{...inp,paddingRight:36}}
+                    onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+                  <button onClick={()=>setShowOld(v=>!v)} style={{position:"absolute",right:10,top:"50%",
+                    transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:14,color:C.textMid}}>
+                    {showOld?"🙈":"👁️"}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>New Password</div>
+                <div style={{position:"relative"}}>
+                  <input type={showNew?"text":"password"} value={newPw} onChange={e=>setNewPw(e.target.value)}
+                    placeholder="Min 6 characters" style={{...inp,paddingRight:36}}
+                    onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+                  <button onClick={()=>setShowNew(v=>!v)} style={{position:"absolute",right:10,top:"50%",
+                    transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:14,color:C.textMid}}>
+                    {showNew?"🙈":"👁️"}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <div style={{fontSize:12,fontWeight:500,color:C.textMid,marginBottom:5}}>Confirm New Password</div>
+                <input type="password" value={confirmPw} onChange={e=>setConfirmPw(e.target.value)}
+                  placeholder="Repeat new password" style={inp}
+                  onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+              </div>
+              {msg && (
+                <div style={{padding:"8px 12px",borderRadius:6,fontSize:12,fontWeight:500,
+                  background:msg.type==="success"?C.successBg:C.dangerBg,
+                  color:msg.type==="success"?C.success:C.danger,
+                  border:`1px solid ${msg.type==="success"?"#c3e6cb":"#fecaca"}`}}>
+                  {msg.type==="success"?"✓":"⚠"} {msg.text}
+                </div>
+              )}
+              <Btn onClick={handleChangePw} disabled={!oldPw||!newPw||!confirmPw}>
+                Update Password
+              </Btn>
+            </div>
+          )}
+
+          {tab==="appearance" && (
+            <div style={{display:"flex",flexDirection:"column",gap:16}}>
+              <div style={{fontSize:13,fontWeight:600,color:C.text,marginBottom:4}}>Theme</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                {[
+                  {id:false,label:"☀️ Light",desc:"White background, standard theme",bg:"#ffffff",border:"#e0e0e0",text:"#212529"},
+                  {id:true, label:"🌙 Dark", desc:"Dark background, eye-friendly",  bg:"#0d1117",border:"#30363d",text:"#e6edf3"},
+                ].map(t=>(
+                  <button key={String(t.id)} onClick={()=>setDarkMode(t.id)}
+                    style={{padding:16,border:`2px solid ${darkMode===t.id?C.primary:C.border}`,
+                      borderRadius:10,cursor:"pointer",textAlign:"left",transition:"all .15s",
+                      background:t.bg}}>
+                    <div style={{width:"100%",height:40,borderRadius:6,border:`1px solid ${t.border}`,
+                      marginBottom:10,background:t.bg,display:"flex",gap:6,padding:6}}>
+                      {[1,2,3].map(i=><div key={i} style={{flex:1,background:t.border,borderRadius:3}}/>)}
+                    </div>
+                    <div style={{fontSize:13,fontWeight:600,color:t.text}}>{t.label}</div>
+                    <div style={{fontSize:11,color:t.text,opacity:0.6,marginTop:2}}>{t.desc}</div>
+                    {darkMode===t.id && <div style={{marginTop:8,fontSize:11,color:C.primary,fontWeight:600}}>✓ Active</div>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const NAV = [
   { id:"dash",       label:"Dashboard",       icon:"⊞",  group:"Main" },
   { id:"analysis",   label:"Analysis",        icon:"📊", group:"Main" },
@@ -6099,7 +6316,6 @@ export default function App() {
       const saved = localStorage.getItem("shibli_erp_state");
       if (saved) {
         const parsed = JSON.parse(saved);
-        // Merge with SEED to ensure new fields added in updates are present
         return { ...SEED, ...parsed,
           rawMaterials: parsed.rawMaterials || SEED.rawMaterials,
           finishedGoods: parsed.finishedGoods || SEED.finishedGoods,
@@ -6116,6 +6332,31 @@ export default function App() {
   const [clock, setClock] = useState(new Date());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
+  const [darkMode, setDarkMode] = useState(()=>{ try{ return localStorage.getItem("shibli_dark")==="1"; }catch(e){return false;} });
+  const [showSettings, setShowSettings] = useState(false);
+  // Per-user passwords stored in localStorage (separate from ERP state)
+  const loadPasswords = () => { try{ const p=localStorage.getItem("shibli_passwords"); return p?JSON.parse(p):{};} catch(e){return {};} };
+  const [userPasswords, setUserPasswords] = useState(loadPasswords);
+
+  const getPassword = (userId) => userPasswords[userId] || USERS.find(u=>u.id===userId)?.password || "";
+  const savePassword = (userId, pw) => {
+    const updated = {...userPasswords, [userId]:pw};
+    setUserPasswords(updated);
+    try{ localStorage.setItem("shibli_passwords", JSON.stringify(updated)); }catch(e){}
+  };
+
+  // Dark mode colors override
+  const DC = darkMode ? {
+    bg:"#0d1117", surface:"#161b22", border:"#30363d", borderMid:"#30363d",
+    text:"#e6edf3", textMid:"#8b949e", textLight:"#484f58", textDim:"#484f58",
+    primary:"#a371f7", primaryHov:"#8b5cf6", primaryLight:"#21262d",
+    success:"#3fb950", successBg:"#1a3a1f", warning:"#d29922", warningBg:"#2d2a1a",
+    amberL:"#2d2a1a", danger:"#f85149", dangerBg:"#3a1f1f",
+    info:"#58a6ff", infoBg:"#1a2a3a", orange:"#d18616", orangeBg:"#2d2010",
+  } : {};
+
+  // Merge dark mode overrides into C at runtime
+  const theme = darkMode ? {...C,...DC} : C;
 
   // Save state to localStorage on every change
   useEffect(()=>{
@@ -6123,18 +6364,24 @@ export default function App() {
     catch(e) { console.warn("Could not save state:", e); }
   }, [S]);
 
-  // Save active tab
   useEffect(()=>{
     try { localStorage.setItem("shibli_active", active); }
     catch(e) {}
   }, [active]);
+
+  useEffect(()=>{
+    try { localStorage.setItem("shibli_dark", darkMode?"1":"0"); }
+    catch(e){}
+    // Apply body background
+    document.body.style.background = darkMode ? "#0d1117" : "#f5f5f5";
+  }, [darkMode]);
 
   useEffect(()=>{ const t=setInterval(()=>setClock(new Date()),1000); return ()=>clearInterval(t); },[]);
 
   if (!currentUser) return (
     <>
       <GlobalStyles />
-      <LoginPage onLogin={user=>setCurrentUser(user)} />
+      <LoginPage onLogin={user=>setCurrentUser(user)} getPassword={getPassword} darkMode={darkMode} />
     </>
   );
 
@@ -6150,11 +6397,11 @@ export default function App() {
   return (
     <>
       <GlobalStyles />
-      <div style={{ display:"flex", height:"100vh", background:C.bg, fontFamily:"'Inter',sans-serif", overflow:"hidden" }}>
+      <div style={{ display:"flex", height:"100vh", background:theme.bg, fontFamily:"'Inter',sans-serif", overflow:"hidden", color:theme.text }}>
 
         {/* ── SIDEBAR ── */}
-        <div style={{ width: sidebarCollapsed ? 56 : 230, background:"#fff",
-          borderRight:`1px solid ${C.border}`, display:"flex", flexDirection:"column",
+        <div style={{ width: sidebarCollapsed ? 56 : 230, background:theme.surface,
+          borderRight:`1px solid ${theme.border}`, display:"flex", flexDirection:"column",
           flexShrink:0, transition:"width .2s ease", overflow:"hidden" }}>
 
           {/* Logo */}
@@ -6266,6 +6513,22 @@ export default function App() {
               </div>
             )}
             <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              {/* Dark mode toggle */}
+              <button onClick={()=>setDarkMode(v=>!v)}
+                title={darkMode?"Switch to Light Mode":"Switch to Dark Mode"}
+                style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:6,
+                  padding:"4px 8px", fontSize:14, cursor:"pointer", color:C.textMid,
+                  transition:"all .15s" }}>
+                {darkMode?"☀️":"🌙"}
+              </button>
+              {/* Settings */}
+              <button onClick={()=>setShowSettings(true)}
+                title="Settings"
+                style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:6,
+                  padding:"4px 8px", fontSize:14, cursor:"pointer", color:C.textMid,
+                  transition:"all .15s" }}>
+                ⚙️
+              </button>
               <div style={{ width:30, height:30, borderRadius:"50%",
                 background:currentUser.color, display:"flex", alignItems:"center",
                 justifyContent:"center", color:"#fff", fontSize:12, fontWeight:700 }}>
@@ -6285,7 +6548,7 @@ export default function App() {
           </div>
 
           {/* Main content */}
-          <div style={{ flex:1, overflowY:"auto", padding:24 }}>
+          <div style={{ flex:1, overflowY:"auto", padding:24, background:theme.bg }}>
             {safeActive==="dash"       && <Dashboard     S={S} />}
             {safeActive==="analysis"   && <Analysis      S={S} />}
             {safeActive==="mfg"        && <Manufacturing S={S} />}
@@ -6303,6 +6566,18 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {/* ── SETTINGS MODAL ── */}
+      {showSettings && (
+        <SettingsModal
+          currentUser={currentUser}
+          getPassword={getPassword}
+          savePassword={savePassword}
+          darkMode={darkMode}
+          setDarkMode={setDarkMode}
+          onClose={()=>setShowSettings(false)}
+        />
+      )}
     </>
   );
 }
